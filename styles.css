@@ -1315,6 +1315,42 @@ html, body {
   opacity: 1;
 }
 
+.toast-notification.toast-danger {
+  border-color: var(--status-danger);
+  background: rgba(24, 24, 27, 0.95);
+}
+
+.toast-notification.toast-warning {
+  border-color: #f59e0b;
+  background: rgba(24, 24, 27, 0.95);
+}
+
+.toast-notification.toast-success {
+  border-color: var(--status-live);
+  background: rgba(24, 24, 27, 0.95);
+}
+
+.btn-retry-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid var(--status-danger);
+  border-radius: 3px;
+  color: var(--status-danger);
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-tactile);
+  pointer-events: auto;
+}
+
+.btn-retry-action:hover {
+  background: var(--status-danger);
+  color: #fff;
+}
+
 @media (max-width: 768px) {
   .app-sidebar {
     position: absolute;

@@ -1,21 +1,47 @@
 /**
  * NexusMeet WebRTC Mesh, Screen Share, P2P File Transfer, Whiteboard & Secure JWT Auth
  *
- * Security Model:
+ * Architecture & Reliability Model:
+ * - Detects, explains, recovers, retries, fails safely, and logs all runtime events.
  * - End-to-End Encryption (E2EE) uses AES-256-GCM with a cryptographically random 256-bit symmetric key.
- * - The room secret is distributed out-of-band via URL fragments (#key=...) and stored in sessionStorage.
- * - URL fragments are never transmitted to the HTTP server in request paths.
- * - The backend signaling server never receives or stores plaintext encryption keys or room secrets.
- * - Every encryption operation (chat messages and binary file chunks) uses a fresh, cryptographically
- *   unique 12-byte initialization vector (IV) generated via crypto.getRandomValues().
+ * - Key distributed out-of-band via URL fragment (#key=...) and sessionStorage; never sent to backend.
+ * - Resilient WebRTC peer connection state machine with automatic ICE restart and candidate queuing.
+ * - Backpressure-protected P2P file transfer with 32-bit checksum integrity verification and retry.
+ * - Centralized Error & Reliability Manager integration with safe secret redaction.
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
-  // 1. Authentication Guard & Parameter Extraction
+  // 1. Error & Reliability Manager Integration
+  // ---------------------------------------------------------------------------
+  const EM = (typeof window !== 'undefined' && window.NexusErrorManager) ? window.NexusErrorManager : {
+    CATEGORIES: {
+      AUTH: 'AUTH', API: 'API', MEDIA: 'MEDIA', SOCKET: 'SOCKET', WEBRTC: 'WEBRTC',
+      DATACHANNEL: 'DATACHANNEL', FILE_TRANSFER: 'FILE_TRANSFER', ENCRYPTION: 'ENCRYPTION',
+      WHITEBOARD: 'WHITEBOARD', SCREEN_SHARE: 'SCREEN_SHARE', VALIDATION: 'VALIDATION', UNKNOWN: 'UNKNOWN'
+    },
+    logger: {
+      debug: (cat, op, msg, ctx) => console.debug(`[NexusMeet] [DEBUG] [${cat}] [${op}]`, msg, ctx || ''),
+      info: (cat, op, msg, ctx) => console.log(`[NexusMeet] [INFO] [${cat}] [${op}]`, msg, ctx || ''),
+      warn: (cat, op, msg, ctx) => console.warn(`[NexusMeet] [WARN] [${cat}] [${op}]`, msg, ctx || ''),
+      error: (cat, op, msg, ctx) => console.error(`[NexusMeet] [ERROR] [${cat}] [${op}]`, msg, ctx || '')
+    },
+    getUserFriendlyMessage: (cat, err) => err?.message || 'An unexpected issue occurred.',
+    showNotification: (msg, type) => showToast(msg, type),
+    apiFetch: async (url, opts) => {
+      const res = await fetch(url, opts);
+      return res.json();
+    }
+  };
+
+  const CAT = EM.CATEGORIES;
+
+  // ---------------------------------------------------------------------------
+  // 2. Authentication Guard & Parameter Extraction
   // ---------------------------------------------------------------------------
   const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('room') || 'nexus-alpha';
+  const rawRoomParam = urlParams.get('room');
+  const roomId = (rawRoomParam && rawRoomParam.trim()) ? rawRoomParam.trim().replace(/[^a-zA-Z0-9_-]/g, '') : 'nexus-alpha';
 
   // Set Room Header immediately so it never stays stuck on "Room: Loading..."
   const roomHeaderEl = document.getElementById('room-display-id');
@@ -25,6 +51,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const token = typeof getAuthToken === 'function' ? getAuthToken() : null;
   if (!token) {
+    EM.logger.warn(CAT.AUTH, 'guard', 'No JWT token found in localStorage, redirecting to login.');
     window.location.href = '/login';
     return;
   }
@@ -33,10 +60,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     verifiedUser = typeof apiFetchProfile === 'function' ? await apiFetchProfile() : null;
   } catch (authErr) {
-    console.warn('[Auth] Profile fetch failed:', authErr.message);
+    EM.logger.warn(CAT.AUTH, 'profileFetch', 'User profile verification failed:', { error: authErr.message });
   }
 
   if (!verifiedUser) {
+    EM.logger.warn(CAT.AUTH, 'guard', 'Unverified user token, clearing session and redirecting.');
     if (typeof clearAuthSession === 'function') clearAuthSession();
     window.location.href = '/login';
     return;
@@ -44,11 +72,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const username = verifiedUser.username;
 
-  // Read pre-selected Lobby media preferences if available
+  // Read pre-selected Lobby media preferences
   const initialMicPref = sessionStorage.getItem('nexus_initial_mic') !== 'false';
   const initialVideoPref = sessionStorage.getItem('nexus_initial_video') !== 'false';
 
-  // Local State
+  // Core Local State
   const localState = {
     socketId: null,
     userId: verifiedUser.id,
@@ -64,11 +92,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   let isSharingScreen = false;
   let syntheticStreamCleanup = null;
 
+  // Peer & Transfer State
   const participantsMap = new Map();
   const peerConnections = new Map();
   const dataChannels = new Map();
   const iceCandidateQueues = new Map();
+  const peerRetryCounts = new Map();
   const activeIncomingTransfers = new Map();
+  const senderFileRegistry = new Map(); // transferId -> File (for UI Retry)
   const activeObjectUrls = [];
   let sharedFilesCount = 0;
 
@@ -84,65 +115,87 @@ document.addEventListener('DOMContentLoaded', async () => {
     ]
   };
 
-  /**
-   * Securely fetch dynamic STUN and TURN server credentials from the backend
-   * before initializing RTCPeerConnection instances.
-   */
+  // ---------------------------------------------------------------------------
+  // 3. Dynamic TURN/STUN Credentials Fetching
+  // ---------------------------------------------------------------------------
   async function fetchTurnCredentials() {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 2000);
     try {
-      const response = await fetch('/api/webrtc/turn-credentials', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        signal: controller.signal
+      const data = await EM.apiFetch('/api/webrtc/turn-credentials', {
+        headers: { 'Authorization': `Bearer ${token}` }
+      }, {
+        timeoutMs: 2500,
+        maxRetries: 1,
+        category: CAT.WEBRTC,
+        operation: 'fetchTurnCredentials'
       });
-      clearTimeout(timeoutId);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && Array.isArray(data.iceServers)) {
-          rtcConfig.iceServers = data.iceServers;
-          console.log('[WebRTC] Dynamic STUN/TURN server credentials loaded successfully.');
-        }
+
+      if (data && data.success && Array.isArray(data.iceServers)) {
+        rtcConfig.iceServers = data.iceServers;
+        EM.logger.info(CAT.WEBRTC, 'turnCredentials', 'Dynamic STUN/TURN server credentials loaded successfully.');
       }
     } catch (err) {
-      clearTimeout(timeoutId);
-      console.warn('[WebRTC] Dynamic TURN credentials unavailable, using fallback STUN servers.');
+      EM.logger.warn(CAT.WEBRTC, 'turnCredentials', 'Dynamic TURN request unavailable, using default STUN fallbacks.');
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 2. Local Media Acquisition & Fallback Synthetic Stream
+  // 4. Local Media Acquisition (Graceful Degradation & Fallback)
   // ---------------------------------------------------------------------------
   async function initLocalMedia() {
     try {
+      // 1. Attempt Full Camera + Microphone stream
       const mediaPromise = navigator.mediaDevices.getUserMedia({
         video: true,
         audio: true
       });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Media acquisition timeout')), 3000)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        const tId = setTimeout(() => reject(new Error('Media acquisition timeout')), 3000);
+        mediaPromise.then(() => clearTimeout(tId)).catch(() => clearTimeout(tId));
+      });
 
       localStream = await Promise.race([mediaPromise, timeoutPromise]);
+      EM.logger.info(CAT.MEDIA, 'getUserMedia', 'Acquired camera and microphone successfully.');
 
-      if (localStream.getAudioTracks().length > 0) {
-        localStream.getAudioTracks().forEach(t => t.enabled = localState.micOn);
-      }
-      if (localStream.getVideoTracks().length > 0) {
-        localStream.getVideoTracks().forEach(t => t.enabled = localState.videoOn);
-      }
-      console.log('[Media] Local camera and microphone stream acquired.');
     } catch (err) {
+      EM.logger.warn(CAT.MEDIA, 'getUserMedia', 'Full media acquisition failed. Attempting audio/video fallback...', { error: err.name || err.message });
+
+      // 2. Try Video-Only fallback
       try {
         localStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        if (localStream.getVideoTracks().length > 0) {
-          localStream.getVideoTracks().forEach(t => t.enabled = localState.videoOn);
+        EM.showNotification(EM.getUserFriendlyMessage(CAT.MEDIA, err, { kind: 'audio' }), 'warning');
+      } catch (videoErr) {
+        // 3. Try Audio-Only fallback
+        try {
+          localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          EM.showNotification(EM.getUserFriendlyMessage(CAT.MEDIA, err, { kind: 'video' }), 'warning');
+        } catch (audioErr) {
+          // 4. Full Fallback to Synthetic Canvas Stream so user can still collaborate
+          EM.logger.warn(CAT.MEDIA, 'fallback', 'Hardware media completely unavailable. Using synthetic fallback stream.');
+          EM.showNotification(EM.getUserFriendlyMessage(CAT.MEDIA, err), 'warning', 4500);
+          localStream = createSyntheticStream();
         }
-      } catch (e1) {
-        console.warn('[Media] Using synthetic canvas fallback stream:', err.message);
-        localStream = createSyntheticStream();
+      }
+    }
+
+    // Apply initial mute/video toggle preferences
+    if (localStream) {
+      if (localStream.getAudioTracks().length > 0) {
+        localStream.getAudioTracks().forEach(t => {
+          t.enabled = localState.micOn;
+          t.onended = () => {
+            EM.logger.warn(CAT.MEDIA, 'deviceDisconnected', 'Audio input track ended unexpectedly.');
+            EM.showNotification('Microphone was disconnected.', 'warning');
+          };
+        });
+      }
+      if (localStream.getVideoTracks().length > 0) {
+        localStream.getVideoTracks().forEach(t => {
+          t.enabled = localState.videoOn;
+          t.onended = () => {
+            EM.logger.warn(CAT.MEDIA, 'deviceDisconnected', 'Video input track ended unexpectedly.');
+            EM.showNotification('Camera was disconnected.', 'warning');
+          };
+        });
       }
     }
   }
@@ -173,7 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         osc = audioCtx.createOscillator();
         const dst = audioCtx.createMediaStreamDestination();
         const gainNode = audioCtx.createGain();
-        gainNode.gain.value = 0.0001; // Safe silent audio track
+        gainNode.gain.value = 0.0001; // Safe virtually-silent audio track
         osc.connect(gainNode);
         gainNode.connect(dst);
         osc.start();
@@ -184,7 +237,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       }
     } catch (audioErr) {
-      console.warn('[Media] AudioContext synthetic fallback failed:', audioErr.message);
+      EM.logger.warn(CAT.MEDIA, 'syntheticAudio', 'AudioContext synthetic fallback failed:', { error: audioErr.message });
     }
 
     syntheticStreamCleanup = () => {
@@ -201,7 +254,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 3. End-to-End Encryption (E2EE) Web Crypto API Layer (AES-256-GCM)
+  // 5. End-to-End Encryption (E2EE) Web Crypto API Layer (AES-256-GCM)
   // ---------------------------------------------------------------------------
   let roomAESKey = null;
 
@@ -237,8 +290,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // Fast 32-bit Adler-32 Checksum for File Chunk Integrity
+  function computeAdler32(arrayBuffer) {
+    let a = 1, b = 0;
+    const bytes = new Uint8Array(arrayBuffer);
+    const len = bytes.length;
+    for (let i = 0; i < len; i++) {
+      a = (a + bytes[i]) % 65521;
+      b = (b + a) % 65521;
+    }
+    return ((b << 16) | a) >>> 0;
+  }
+
   /**
-   * Initialize a cryptographically random 256-bit AES-GCM room key.
+   * Derive or import the random 256-bit AES-GCM room key.
    * Distributed out-of-band via URL fragment (#key=...) and sessionStorage.
    * Never sent to or stored on the backend.
    */
@@ -256,7 +321,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (_) {}
       }
 
-      // 2. Check sessionStorage fallback across page reloads
+      // 2. Check sessionStorage fallback across page refreshes
       if (!rawKeyHex) {
         try {
           rawKeyHex = sessionStorage.getItem(`nexus_e2ee_key_${roomIdentifier}`);
@@ -286,50 +351,51 @@ document.addEventListener('DOMContentLoaded', async () => {
         ['encrypt', 'decrypt']
       );
 
-      console.log('[E2EE] Client-side AES-256-GCM session key initialized successfully.');
+      EM.logger.info(CAT.ENCRYPTION, 'initKey', 'Client-side AES-256-GCM symmetric session key initialized.');
     } catch (err) {
-      console.error('[E2EE] Failed to initialize AES-GCM key:', err.message);
+      EM.logger.error(CAT.ENCRYPTION, 'initKey', 'Failed to initialize AES-GCM session key:', { error: err.message });
+      EM.showNotification('Encryption key initialization failed. End-to-end encryption may be limited.', 'warning');
     }
   }
 
-  /**
-   * Encrypt text payload with AES-GCM using a cryptographically unique 12-byte IV.
-   */
   async function encryptTextMessage(plainText) {
     if (!roomAESKey) return { ciphertext: plainText, iv: null, encrypted: false };
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encoded = new TextEncoder().encode(plainText);
-    const cipherBuffer = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv },
-      roomAESKey,
-      encoded
-    );
-    return {
-      ciphertext: arrayBufferToBase64(cipherBuffer),
-      iv: arrayBufferToBase64(iv),
-      encrypted: true
-    };
+    try {
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const encoded = new TextEncoder().encode(plainText);
+      const cipherBuffer = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv: iv },
+        roomAESKey,
+        encoded
+      );
+      return {
+        ciphertext: arrayBufferToBase64(cipherBuffer),
+        iv: arrayBufferToBase64(iv),
+        encrypted: true
+      };
+    } catch (err) {
+      EM.logger.error(CAT.ENCRYPTION, 'encryptText', 'Error encrypting message:', { error: err.message });
+      throw new Error('Message encryption failed');
+    }
   }
 
-  /**
-   * Decrypt AES-GCM text payload using the room key and provided IV.
-   */
   async function decryptTextMessage(ciphertextBase64, ivBase64) {
     if (!roomAESKey || !ivBase64) return ciphertextBase64;
-    const iv = new Uint8Array(base64ToArrayBuffer(ivBase64));
-    const cipherBuffer = base64ToArrayBuffer(ciphertextBase64);
-    const decryptedBuffer = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv },
-      roomAESKey,
-      cipherBuffer
-    );
-    return new TextDecoder().decode(decryptedBuffer);
+    try {
+      const iv = new Uint8Array(base64ToArrayBuffer(ivBase64));
+      const cipherBuffer = base64ToArrayBuffer(ciphertextBase64);
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: iv },
+        roomAESKey,
+        cipherBuffer
+      );
+      return new TextDecoder().decode(decryptedBuffer);
+    } catch (err) {
+      EM.logger.warn(CAT.ENCRYPTION, 'decryptText', 'Decryption failed for incoming message.');
+      return 'Unable to decrypt this message.';
+    }
   }
 
-  /**
-   * Encrypt binary chunk for WebRTC DataChannel file transfer.
-   * Prepends a fresh 12-byte IV directly to the encrypted chunk buffer.
-   */
   async function encryptBinaryChunk(chunkArrayBuffer) {
     if (!roomAESKey) return chunkArrayBuffer;
     const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -344,10 +410,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     return combined.buffer;
   }
 
-  /**
-   * Decrypt binary chunk received over WebRTC DataChannel.
-   * Extracts the leading 12-byte IV and decrypts the remaining payload.
-   */
   async function decryptBinaryChunk(combinedArrayBuffer) {
     if (!roomAESKey) return combinedArrayBuffer;
     if (combinedArrayBuffer.byteLength < 13) {
@@ -363,7 +425,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return decryptedBuffer;
   }
 
-  // Run media acquisition, E2EE key setup, and TURN credential fetching in parallel
+  // Initialize Media, Encryption, and Credentials in parallel
   await Promise.all([
     initLocalMedia(),
     initRoomEncryption(roomId),
@@ -371,16 +433,36 @@ document.addEventListener('DOMContentLoaded', async () => {
   ]);
 
   // ---------------------------------------------------------------------------
-  // 4. Authenticated Socket.io Connection & Safe Emission Helper
+  // 6. Resilient Socket.io Connection & Event Handling
   // ---------------------------------------------------------------------------
   let socket = null;
+  let isSocketConnected = false;
+  let reconnectCount = 0;
   const statusDot = document.getElementById('connection-status-dot');
+
+  function updateConnectionStatusUI(status) {
+    if (!statusDot) return;
+    if (status === 'connected') {
+      statusDot.style.backgroundColor = 'var(--status-live, #10b981)';
+      statusDot.style.boxShadow = '0 0 6px var(--status-live, #10b981)';
+      statusDot.title = 'Connected to conference server';
+    } else if (status === 'reconnecting') {
+      statusDot.style.backgroundColor = '#f59e0b';
+      statusDot.style.boxShadow = '0 0 6px #f59e0b';
+      statusDot.title = 'Reconnecting to conference server...';
+    } else {
+      statusDot.style.backgroundColor = 'var(--status-danger, #ef4444)';
+      statusDot.style.boxShadow = 'none';
+      statusDot.title = 'Disconnected from conference server';
+    }
+  }
 
   function safeSocketEmit(event, data) {
     if (socket && socket.connected) {
       socket.emit(event, data);
       return true;
     }
+    EM.logger.warn(CAT.SOCKET, 'safeSocketEmit', `Cannot emit "${event}": Socket not connected.`);
     return false;
   }
 
@@ -389,19 +471,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       socket = io({
         auth: { token: token },
         transports: ['websocket'],
-        upgrade: false
+        upgrade: false,
+        reconnection: true,
+        reconnectionAttempts: 10,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000
       });
     } catch (sockInitErr) {
-      console.error('[Socket] Initialization error:', sockInitErr);
-      showToast('Connection initialization failed. Please reload.', 'danger');
+      EM.logger.error(CAT.SOCKET, 'init', 'Socket.io initialization error:', { error: sockInitErr.message });
+      EM.showNotification('Connection initialization failed. Please reload.', 'danger');
     }
   } else {
-    console.error('[Socket] Socket.io client library unavailable.');
-    showToast('Real-time connection unavailable. Socket.io client failed to load.', 'danger');
+    EM.logger.error(CAT.SOCKET, 'init', 'Socket.io client library not loaded in DOM.');
+    EM.showNotification('Real-time connection unavailable. Socket.io client failed to load.', 'danger');
   }
 
   // ---------------------------------------------------------------------------
-  // 5. WebRTC Mesh Signaling, Candidate Queuing & Reconciled Peer Connections
+  // 7. WebRTC Mesh Signaling, Candidate Queuing & Reconciled Connections
   // ---------------------------------------------------------------------------
 
   function queueOrAddIceCandidate(targetSocketId, candidate) {
@@ -415,7 +501,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(err => {
-      console.warn(`[WebRTC ICE] Candidate error for ${targetSocketId}:`, err.message);
+      EM.logger.warn(CAT.WEBRTC, 'addIceCandidate', `Candidate error for ${targetSocketId}:`, { error: err.message });
     });
   }
 
@@ -431,13 +517,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         await pc.addIceCandidate(new RTCIceCandidate(cand));
       } catch (err) {
-        console.warn(`[WebRTC ICE] Error flushing candidate for ${targetSocketId}:`, err.message);
+        EM.logger.warn(CAT.WEBRTC, 'flushIceQueue', `Error applying candidate for ${targetSocketId}:`, { error: err.message });
       }
     }
   }
 
   function cleanUpPeerConnection(targetSocketId) {
     iceCandidateQueues.delete(targetSocketId);
+    peerRetryCounts.delete(targetSocketId);
 
     if (dataChannels.has(targetSocketId)) {
       const dc = dataChannels.get(targetSocketId);
@@ -476,8 +563,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!iceCandidateQueues.has(targetSocketId)) {
       iceCandidateQueues.set(targetSocketId, []);
     }
+    if (!peerRetryCounts.has(targetSocketId)) {
+      peerRetryCounts.set(targetSocketId, 0);
+    }
 
-    // Attach active media tracks (screen video or camera, along with local microphone audio)
+    // Attach local media streams
     if (isSharingScreen && screenStream) {
       screenStream.getVideoTracks().forEach(track => pc.addTrack(track, screenStream));
       if (localStream) {
@@ -492,7 +582,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const dc = pc.createDataChannel('nexusFileTransfer', { ordered: true });
         setupDataChannelEvents(targetSocketId, dc);
       } catch (err) {
-        console.error('[WebRTC DataChannel] Error creating caller data channel:', err);
+        EM.logger.error(CAT.DATACHANNEL, 'createChannel', 'Caller data channel creation failed:', { error: err.message });
       }
     } else {
       pc.ondatachannel = (event) => {
@@ -515,13 +605,35 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     };
 
-    pc.onconnectionstatechange = () => {
+    // Robust WebRTC State Machine with Automatic Recovery (DETECT → RECOVER → RETRY)
+    pc.onconnectionstatechange = async () => {
       const state = pc.connectionState;
-      console.log(`[WebRTC] Peer ${targetSocketId} connectionState: ${state}`);
-      if (state === 'failed') {
-        console.warn(`[WebRTC] Peer ${targetSocketId} connection permanently failed.`);
-        cleanUpPeerConnection(targetSocketId);
-        showToast('A peer connection experienced an unrecoverable failure.', 'warning');
+      EM.logger.info(CAT.WEBRTC, 'connectionState', `Peer ${targetSocketId} connectionState changed to: ${state}`);
+
+      if (state === 'connected') {
+        peerRetryCounts.set(targetSocketId, 0);
+      } else if (state === 'failed') {
+        const retries = peerRetryCounts.get(targetSocketId) || 0;
+        if (retries < 2) {
+          peerRetryCounts.set(targetSocketId, retries + 1);
+          EM.logger.warn(CAT.WEBRTC, 'recovery', `Peer ${targetSocketId} connection failed. Attempting ICE restart (${retries + 1}/2)...`);
+          EM.showNotification('Connection with participant interrupted. Retrying...', 'warning');
+
+          try {
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            safeSocketEmit('webrtc-offer', {
+              targetSocketId: targetSocketId,
+              offer: offer
+            });
+          } catch (restartErr) {
+            EM.logger.error(CAT.WEBRTC, 'iceRestart', 'ICE restart offer failed:', { error: restartErr.message });
+          }
+        } else {
+          EM.logger.error(CAT.WEBRTC, 'recovery', `Peer ${targetSocketId} connection permanently failed after ${retries} retries.`);
+          EM.showNotification('Unable to connect to this participant. Connection unrecoverable.', 'danger');
+          cleanUpPeerConnection(targetSocketId);
+        }
       } else if (state === 'closed') {
         cleanUpPeerConnection(targetSocketId);
       }
@@ -529,8 +641,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     pc.oniceconnectionstatechange = () => {
       const iceState = pc.iceConnectionState;
-      if (iceState === 'failed') {
-        console.warn(`[WebRTC] Peer ${targetSocketId} ICE connection failed.`);
+      EM.logger.info(CAT.WEBRTC, 'iceConnectionState', `Peer ${targetSocketId} ICE state: ${iceState}`);
+      if (iceState === 'failed' && pc.connectionState !== 'failed') {
+        EM.logger.warn(CAT.WEBRTC, 'iceConnectionState', `Peer ${targetSocketId} ICE connection failed.`);
       }
     };
 
@@ -542,15 +655,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     channel.bufferedAmountLowThreshold = 65536; // 64KB backpressure threshold
     dataChannels.set(targetSocketId, channel);
 
-    channel.onopen = () => console.log(`[DataChannel] Connected with peer: ${targetSocketId}`);
+    channel.onopen = () => {
+      EM.logger.info(CAT.DATACHANNEL, 'onopen', `DataChannel open with peer: ${targetSocketId}`);
+    };
+
     channel.onclose = () => {
+      EM.logger.info(CAT.DATACHANNEL, 'onclose', `DataChannel closed with peer: ${targetSocketId}`);
       if (dataChannels.get(targetSocketId) === channel) {
         dataChannels.delete(targetSocketId);
       }
     };
+
     channel.onerror = (err) => {
-      console.warn(`[DataChannel] Error on peer channel ${targetSocketId}:`, err);
+      EM.logger.warn(CAT.DATACHANNEL, 'onerror', `DataChannel error with peer ${targetSocketId}:`, { error: err.message });
     };
+
     channel.onmessage = (event) => handleIncomingDataChannelMessage(targetSocketId, event.data);
   }
 
@@ -559,7 +678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       const pc = createPeerConnection(targetSocketId, true);
       if (pc.signalingState !== 'stable') {
-        console.warn(`[WebRTC] Peer ${targetSocketId} signalingState is ${pc.signalingState}, skipping duplicate offer.`);
+        EM.logger.warn(CAT.WEBRTC, 'initiatePeer', `Skipping offer for ${targetSocketId}: signalingState is ${pc.signalingState}`);
         return;
       }
       const offer = await pc.createOffer();
@@ -570,49 +689,61 @@ document.addEventListener('DOMContentLoaded', async () => {
         offer: offer
       });
     } catch (err) {
-      console.error('[WebRTC] Error initiating peer offer:', err);
+      EM.logger.error(CAT.WEBRTC, 'initiatePeer', 'Failed to initiate peer connection offer:', { error: err.message });
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 6. Socket.io Event Listeners (Safe & Bound)
+  // 8. Socket.io Event Listeners & Auto-Recovery
   // ---------------------------------------------------------------------------
   if (socket) {
     socket.on('connect_error', (err) => {
-      console.error('[Socket Error]', err.message);
-      if (statusDot) {
-        statusDot.style.backgroundColor = 'var(--status-danger)';
-        statusDot.style.boxShadow = 'none';
-      }
+      EM.logger.error(CAT.SOCKET, 'connect_error', 'Socket connection error:', { error: err.message });
+      updateConnectionStatusUI('reconnecting');
+
       if (err.message.includes('AUTHENTICATION_ERROR')) {
-        showToast('Session expired. Please log in again.', 'warning');
+        EM.showNotification('Your session has expired. Please sign in again.', 'warning');
         if (typeof clearAuthSession === 'function') clearAuthSession();
         setTimeout(() => window.location.href = '/login', 1500);
       } else {
-        showToast('Server connection failed. Retrying...', 'warning');
+        reconnectCount++;
+        EM.showNotification(`Connection lost. Reconnecting to meeting server...`, 'warning', 2500);
       }
     });
 
     socket.on('connect', () => {
       localState.socketId = socket.id;
-      if (statusDot) {
-        statusDot.style.backgroundColor = 'var(--status-live)';
-        statusDot.style.boxShadow = '0 0 6px var(--status-live)';
+      isSocketConnected = true;
+      updateConnectionStatusUI('connected');
+      EM.logger.info(CAT.SOCKET, 'connect', `Connected to Socket server with ID: ${socket.id}`);
+
+      if (reconnectCount > 0) {
+        EM.showNotification('Reconnected to conference server.', 'success');
+        reconnectCount = 0;
       }
 
+      // Re-join room and restore conference state
       socket.emit('join-room', {
         roomId: roomId,
         micOn: localState.micOn,
         videoOn: localState.videoOn
       });
+
+      if (localState.handRaised) {
+        socket.emit('toggle-hand-raise', { handRaised: true });
+      }
     });
 
     socket.on('disconnect', (reason) => {
-      if (statusDot) {
-        statusDot.style.backgroundColor = 'var(--status-danger)';
-        statusDot.style.boxShadow = 'none';
+      isSocketConnected = false;
+      updateConnectionStatusUI('disconnected');
+      EM.logger.warn(CAT.SOCKET, 'disconnect', `Socket disconnected: ${reason}`);
+
+      if (reason === 'io server disconnect') {
+        // Server forcefully closed connection; manually reconnect
+        socket.connect();
       }
-      showToast(`Disconnected from conference: ${reason}`, 'warning');
+      EM.showNotification('Connection to the meeting server was lost. Reconnecting...', 'warning');
     });
 
     // Reconciled room-users handler (does NOT destroy healthy existing connections)
@@ -654,11 +785,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       updateParticipantCounts();
       updateParticipantsListUI();
 
-      showToast(`${userInfo.username || 'Participant'} joined conference`, 'info');
+      EM.showNotification(`${userInfo.username || 'Participant'} joined conference`, 'info');
       await initiatePeerConnection(userInfo.socketId);
     });
 
-    socket.on('user-disconnected', ({ socketId, username }) => {
+    socket.on('user-disconnected', ({ socketId, username: peerName }) => {
       cleanUpPeerConnection(socketId);
       participantsMap.delete(socketId);
 
@@ -667,7 +798,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
       updateParticipantCounts();
       updateParticipantsListUI();
-      showToast(`${username || 'Participant'} left conference`, 'info');
+      EM.showNotification(`${peerName || 'Participant'} left conference`, 'info');
     });
 
     socket.on('webrtc-offer', async ({ senderSocketId, offer }) => {
@@ -692,7 +823,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           answer: answer
         });
       } catch (err) {
-        console.error('[WebRTC] Error handling SDP offer:', err);
+        EM.logger.error(CAT.WEBRTC, 'handleOffer', 'Error handling incoming SDP offer:', { error: err.message });
       }
     });
 
@@ -704,7 +835,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           await flushIceCandidateQueue(senderSocketId);
         }
       } catch (err) {
-        console.error('[WebRTC] Error setting remote answer:', err);
+        EM.logger.error(CAT.WEBRTC, 'handleAnswer', 'Error setting remote answer:', { error: err.message });
       }
     });
 
@@ -731,7 +862,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateHandRaiseBadgeUI(socketId, handRaised);
         updateParticipantsListUI();
         if (handRaised && socketId !== socket.id) {
-          showToast(`✋ ${peerName || 'Peer'} raised hand`, 'info');
+          EM.showNotification(`✋ ${peerName || 'Peer'} raised hand`, 'info');
         }
       }
     });
@@ -742,8 +873,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           const decryptedText = await decryptTextMessage(data.encryptedPayload, data.iv);
           renderChatMessage({ ...data, message: decryptedText, isEncrypted: true });
         } catch (err) {
-          console.error('[E2EE] Error decrypting incoming chat message:', err);
-          renderChatMessage({ ...data, message: '[🔒 Decryption error: Invalid key or message corrupted]', isEncrypted: true });
+          renderChatMessage({ ...data, message: 'Unable to decrypt this message.', isEncrypted: true });
         }
       } else {
         renderChatMessage(data);
@@ -759,6 +889,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     socket.on('whiteboard-draw', (data) => {
+      if (!isValidStrokeData(data)) {
+        EM.logger.warn(CAT.WHITEBOARD, 'validate', 'Ignored malformed whiteboard stroke from socket.');
+        return;
+      }
       whiteboardHistory.push(data);
       const rect = canvas.getBoundingClientRect();
       const x1 = data.prevX * rect.width;
@@ -771,20 +905,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     socket.on('whiteboard-history', (history) => {
       whiteboardHistory.length = 0;
       if (Array.isArray(history)) {
-        history.forEach(s => whiteboardHistory.push(s));
+        history.forEach(s => {
+          if (isValidStrokeData(s)) whiteboardHistory.push(s);
+        });
       }
       resizeCanvas();
     });
 
     socket.on('whiteboard-clear', () => {
       whiteboardHistory.length = 0;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      showToast('Collaborative canvas cleared by peer', 'info');
+      if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      EM.showNotification('Collaborative canvas cleared by peer', 'info');
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 7. Screen Sharing with replaceTrack & Native Cancellation
+  // 9. Screen Sharing with replaceTrack & Native Cancellation
   // ---------------------------------------------------------------------------
   async function toggleScreenSharing() {
     if (isSharingScreen) {
@@ -811,7 +947,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         const senders = pc.getSenders();
         const videoSender = senders.find(s => s.track && s.track.kind === 'video');
         if (videoSender) {
-          videoSender.replaceTrack(screenTrack);
+          videoSender.replaceTrack(screenTrack).catch(err => {
+            EM.logger.warn(CAT.SCREEN_SHARE, 'replaceTrack', 'Sender track replacement failed:', { error: err.message });
+          });
         }
       });
 
@@ -831,10 +969,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         stopScreenSharing();
       };
 
-      showToast('Screen sharing active', 'info');
+      EM.showNotification('Screen sharing active', 'info');
     } catch (err) {
       if (err.name !== 'NotAllowedError') {
-        console.error('[ScreenShare] Error starting screen share:', err);
+        EM.logger.error(CAT.SCREEN_SHARE, 'startScreenShare', 'Error starting screen share:', { error: err.message });
       }
       isSharingScreen = false;
       updateScreenShareUI(false);
@@ -860,7 +998,9 @@ document.addEventListener('DOMContentLoaded', async () => {
           const senders = pc.getSenders();
           const videoSender = senders.find(s => s.track && s.track.kind === 'video');
           if (videoSender) {
-            videoSender.replaceTrack(cameraTrack);
+            videoSender.replaceTrack(cameraTrack).catch(err => {
+              EM.logger.warn(CAT.SCREEN_SHARE, 'restoreCamera', 'Failed to restore camera track on peer:', { error: err.message });
+            });
           }
         });
       }
@@ -880,7 +1020,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    showToast('Screen sharing stopped');
+    EM.showNotification('Screen sharing stopped');
   }
 
   function updateScreenShareUI(active) {
@@ -899,14 +1039,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 8. P2P File Transfer Protocol & RTCDataChannel Backpressure
+  // 10. P2P File Transfer Protocol, Backpressure & Checksum Verification
   // ---------------------------------------------------------------------------
   const CHUNK_SIZE = 16384; // 16KB payload chunk
 
-  function createChunkPacket(transferId, chunkIndex, totalChunks, encryptedChunkBuffer) {
+  function createChunkPacket(transferId, chunkIndex, totalChunks, checksum, encryptedChunkBuffer) {
     const enc = new TextEncoder();
     const idBytes = enc.encode(transferId);
-    const headerSize = 1 + 1 + idBytes.length + 4 + 4;
+    const headerSize = 1 + 1 + idBytes.length + 4 + 4 + 4;
     const packet = new Uint8Array(headerSize + encryptedChunkBuffer.byteLength);
     const view = new DataView(packet.buffer);
 
@@ -919,20 +1059,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     offset += 4;
     view.setUint32(offset, totalChunks, false);
     offset += 4;
+    view.setUint32(offset, checksum, false);
+    offset += 4;
     packet.set(new Uint8Array(encryptedChunkBuffer), offset);
 
     return packet.buffer;
   }
 
   function parseChunkPacket(arrayBuffer) {
-    if (arrayBuffer.byteLength < 10) return null;
+    if (arrayBuffer.byteLength < 14) return null;
     const view = new DataView(arrayBuffer);
     let offset = 0;
     const msgType = view.getUint8(offset++);
     if (msgType !== 0x01) return null;
 
     const idLen = view.getUint8(offset++);
-    if (arrayBuffer.byteLength < 2 + idLen + 8) return null;
+    if (arrayBuffer.byteLength < 2 + idLen + 12) return null;
 
     const dec = new TextDecoder();
     const transferId = dec.decode(new Uint8Array(arrayBuffer, offset, idLen));
@@ -942,9 +1084,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     offset += 4;
     const totalChunks = view.getUint32(offset, false);
     offset += 4;
+    const checksum = view.getUint32(offset, false);
+    offset += 4;
 
     const payload = arrayBuffer.slice(offset);
-    return { transferId, chunkIndex, totalChunks, payload };
+    return { transferId, chunkIndex, totalChunks, checksum, payload };
   }
 
   function waitForBufferDrain(dc, threshold = 65536) {
@@ -986,11 +1130,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function sendFileOverDataChannel(file) {
     const openDataChannels = Array.from(dataChannels.values()).filter(dc => dc.readyState === 'open');
     if (openDataChannels.length === 0) {
-      showToast('No active peer data channels available to receive file', 'warning');
+      EM.showNotification('No active peer data channels available to receive file', 'warning');
       return;
     }
 
     const transferId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    senderFileRegistry.set(transferId, file);
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
     renderFileTransferCard({
@@ -1021,7 +1166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       try {
         dc.send(metadataMessage);
       } catch (err) {
-        console.warn('[DataChannel] Error sending metadata message:', err);
+        EM.logger.warn(CAT.FILE_TRANSFER, 'sendMeta', 'Error sending metadata message:', { error: err.message });
       }
     }
 
@@ -1031,7 +1176,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const rawSlice = await file.slice(start, end).arrayBuffer();
         const encryptedChunk = await encryptBinaryChunk(rawSlice);
-        const packet = createChunkPacket(transferId, chunkIndex, totalChunks, encryptedChunk);
+        const checksum = computeAdler32(encryptedChunk);
+        const packet = createChunkPacket(transferId, chunkIndex, totalChunks, checksum, encryptedChunk);
 
         for (const dc of openDataChannels) {
           if (dc.readyState !== 'open') continue;
@@ -1046,11 +1192,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       markTransferCompleted(transferId, null, file.name);
-      showToast(`Sent encrypted ${file.name} to peers`, 'info');
+      EM.showNotification(`Sent encrypted ${file.name} to peers`, 'info');
     } catch (err) {
-      console.error('[DataChannel Transfer Error]', err);
+      EM.logger.error(CAT.FILE_TRANSFER, 'send', 'Transfer failed:', { error: err.message });
       markTransferFailed(transferId, file.name, err.message);
-      showToast(`File transfer failed: ${err.message}`, 'danger');
+      EM.showNotification(`File transfer failed: ${err.message}`, 'danger');
     }
   }
 
@@ -1073,7 +1219,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 activeIncomingTransfers.delete(parsed.transferId);
                 markTransferFailed(parsed.transferId, meta.fileName, 'Transfer timed out');
               }
-            }, 180000)
+            }, 120000)
           });
 
           renderFileTransferCard({
@@ -1093,28 +1239,37 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
       } catch (err) {
-        console.error('[DataChannel] Error parsing metadata message:', err);
+        EM.logger.error(CAT.DATACHANNEL, 'parseMeta', 'Error parsing file metadata message:', { error: err.message });
       }
     } else if (data instanceof ArrayBuffer) {
       const packet = parseChunkPacket(data);
       if (!packet) {
-        console.warn('[DataChannel] Discarded malformed binary chunk');
+        EM.logger.warn(CAT.FILE_TRANSFER, 'parsePacket', 'Discarded malformed binary chunk packet.');
         return;
       }
 
-      const { transferId, chunkIndex, totalChunks, payload } = packet;
+      const { transferId, chunkIndex, totalChunks, checksum, payload } = packet;
       const transfer = activeIncomingTransfers.get(transferId);
       if (!transfer) {
         return;
       }
 
       if (chunkIndex >= transfer.meta.totalChunks) {
-        console.warn(`[DataChannel] Out of range chunk index: ${chunkIndex}`);
+        EM.logger.warn(CAT.FILE_TRANSFER, 'bounds', `Out of range chunk index: ${chunkIndex}`);
         return;
       }
 
       if (transfer.chunks.has(chunkIndex)) {
-        return; // Duplicate chunk
+        return; // Duplicate chunk safely ignored
+      }
+
+      // Checksum validation
+      const calculatedChecksum = computeAdler32(payload);
+      if (calculatedChecksum !== checksum) {
+        EM.logger.error(CAT.FILE_TRANSFER, 'checksum', `Checksum mismatch on chunk ${chunkIndex} for ${transferId}`);
+        markTransferFailed(transferId, transfer.meta.fileName, 'Checksum integrity verification failed');
+        activeIncomingTransfers.delete(transferId);
+        return;
       }
 
       let decryptedChunk;
@@ -1122,7 +1277,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         try {
           decryptedChunk = await decryptBinaryChunk(payload);
         } catch (decErr) {
-          console.error('[DataChannel] Failed to decrypt chunk:', decErr);
+          EM.logger.error(CAT.FILE_TRANSFER, 'decryptChunk', 'Failed to decrypt binary chunk:', { error: decErr.message });
           return;
         }
       } else {
@@ -1136,7 +1291,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const progress = Math.min(99, Math.round((transfer.receivedCount / transfer.meta.totalChunks) * 100));
       updateTransferProgressUI(transferId, progress);
 
-      // Reconstruct only when all required chunks have arrived
+      // Reconstruct file once all chunks arrive
       if (transfer.receivedCount === transfer.meta.totalChunks) {
         clearTimeout(transfer.timeoutId);
 
@@ -1154,7 +1309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         if (totalSize !== transfer.meta.fileSize) {
-          console.error(`[DataChannel] File size verification mismatch: assembled ${totalSize}, expected ${transfer.meta.fileSize}`);
+          EM.logger.error(CAT.FILE_TRANSFER, 'verifySize', `Size verification mismatch: assembled ${totalSize}, expected ${transfer.meta.fileSize}`);
           markTransferFailed(transferId, transfer.meta.fileName, 'Integrity verification failed');
           activeIncomingTransfers.delete(transferId);
           return;
@@ -1166,13 +1321,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         markTransferCompleted(transferId, downloadUrl, transfer.meta.fileName);
         activeIncomingTransfers.delete(transferId);
-        showToast(`Decrypted & verified file: ${transfer.meta.fileName}`, 'info');
+        EM.showNotification(`Decrypted & verified file: ${transfer.meta.fileName}`, 'info');
       }
     }
   }
 
   // ---------------------------------------------------------------------------
-  // 9. DOM Injection Safety & File Transfer UI Rendering
+  // 11. DOM Injection Safety & File Transfer UI Rendering
   // ---------------------------------------------------------------------------
   function renderFileTransferCard({ transferId, fileName, fileSize, isSender, progress, isEncrypted = true }) {
     const list = document.getElementById('files-transfers-list');
@@ -1275,7 +1430,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         const sentSpan = document.createElement('span');
         sentSpan.style.fontSize = '0.72rem';
-        sentSpan.style.color = 'var(--status-live)';
+        sentSpan.style.color = 'var(--status-live, #10b981)';
         sentSpan.style.fontWeight = '500';
         sentSpan.innerHTML = '<i class="fa-solid fa-check"></i> Sent';
         actionContainer.appendChild(sentSpan);
@@ -1285,21 +1440,40 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function markTransferFailed(transferId, fileName, reason = 'Transfer failed') {
     const fill = document.getElementById(`progress-fill-${transferId}`);
-    if (fill) fill.style.backgroundColor = 'var(--status-danger)';
+    if (fill) fill.style.backgroundColor = 'var(--status-danger, #ef4444)';
 
     const text = document.getElementById(`progress-text-${transferId}`);
     if (text) {
       text.textContent = 'Failed';
-      text.style.color = 'var(--status-danger)';
+      text.style.color = 'var(--status-danger, #ef4444)';
     }
 
     const actionContainer = document.getElementById(`transfer-action-${transferId}`);
     if (actionContainer) {
-      actionContainer.innerHTML = `
-        <span style="font-size: 0.72rem; color: var(--status-danger); font-weight: 500;" title="${escapeHTML(reason)}">
-          <i class="fa-solid fa-triangle-exclamation"></i> Failed
-        </span>
-      `;
+      actionContainer.innerHTML = '';
+
+      const failText = document.createElement('span');
+      failText.style.fontSize = '0.72rem';
+      failText.style.color = 'var(--status-danger, #ef4444)';
+      failText.style.fontWeight = '500';
+      failText.title = reason;
+      failText.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Failed ';
+      actionContainer.appendChild(failText);
+
+      // Add actionable Retry button if this client was the sender
+      if (senderFileRegistry.has(transferId)) {
+        const retryBtn = document.createElement('button');
+        retryBtn.className = 'btn-retry-action';
+        retryBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i> Retry';
+        retryBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const fileToRetry = senderFileRegistry.get(transferId);
+          if (fileToRetry) {
+            sendFileOverDataChannel(fileToRetry);
+          }
+        });
+        actionContainer.appendChild(retryBtn);
+      }
     }
   }
 
@@ -1339,7 +1513,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 10. Collaborative Whiteboard Engine
+  // 12. Collaborative Whiteboard Engine (Validation & Rapid-Event Throttling)
   // ---------------------------------------------------------------------------
   const whiteboardOverlay = document.getElementById('whiteboard-overlay');
   const canvas = document.getElementById('whiteboard-canvas');
@@ -1352,7 +1526,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   let currentWidth = 2;
   let lastX = 0;
   let lastY = 0;
+  let lastDrawEmitTime = 0;
   const whiteboardHistory = [];
+
+  function isValidStrokeData(data) {
+    if (!data || typeof data !== 'object') return false;
+    const { prevX, prevY, currX, currY, color, width, mode } = data;
+    if (typeof prevX !== 'number' || typeof prevY !== 'number' || typeof currX !== 'number' || typeof currY !== 'number') return false;
+    if (isNaN(prevX) || isNaN(prevY) || isNaN(currX) || isNaN(currY)) return false;
+    if (prevX < 0 || prevX > 1 || prevY < 0 || prevY > 1 || currX < 0 || currX > 1 || currY < 0 || currY > 1) return false;
+    const safeColorRegex = /^#([0-9a-fA-F]{3,8})$|^rgba?\([\d\s,.]+\)$|^hsla?\([\d\s,.]+\)$|^[a-zA-Z]{3,20}$/;
+    if (typeof color !== 'string' || !safeColorRegex.test(color.trim())) return false;
+    if (typeof width !== 'number' || width < 1 || width > 50) return false;
+    if (mode !== 'pen' && mode !== 'eraser') return false;
+    return true;
+  }
 
   function resizeCanvas() {
     if (!canvas || !ctx) return;
@@ -1432,7 +1620,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
 
     whiteboardHistory.push(strokeData);
-    safeSocketEmit('whiteboard-draw', strokeData);
+
+    // Throttle socket draw emissions to 60fps max
+    const now = Date.now();
+    if (now - lastDrawEmitTime > 16) {
+      lastDrawEmitTime = now;
+      safeSocketEmit('whiteboard-draw', strokeData);
+    }
 
     lastX = coords.x;
     lastY = coords.y;
@@ -1484,7 +1678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     isWhiteboardOpen = true;
     if (toggleWhiteboardBtn) toggleWhiteboardBtn.classList.add('active');
     setTimeout(resizeCanvas, 50);
-    showToast('Collaborative Canvas active', 'info');
+    EM.showNotification('Collaborative Canvas active', 'info');
   }
 
   function closeWhiteboard() {
@@ -1553,7 +1747,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         whiteboardHistory.length = 0;
         if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
         safeSocketEmit('whiteboard-clear', {});
-        showToast('Canvas cleared');
+        EM.showNotification('Canvas cleared');
       }
     });
   }
@@ -1574,12 +1768,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       link.download = `whiteboard-${roomId}-${Date.now()}.png`;
       link.href = exportCanvas.toDataURL('image/png');
       link.click();
-      showToast('Canvas snapshot exported', 'info');
+      EM.showNotification('Canvas snapshot exported', 'info');
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 11. Participant Video Tiles & State
+  // 13. Participant Video Tiles & State
   // ---------------------------------------------------------------------------
   function renderParticipantTile(user, isSelf = false) {
     const videoGrid = document.getElementById('video-grid');
@@ -1725,7 +1919,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 12. Media Control Buttons
+  // 14. Media Control Buttons
   // ---------------------------------------------------------------------------
   const micBtn = document.getElementById('toggle-mic');
   if (micBtn) {
@@ -1746,7 +1940,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         safeSocketEmit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
       }
       updateParticipantsListUI();
-      showToast(localState.micOn ? 'Microphone unmuted' : 'Microphone muted');
+      EM.showNotification(localState.micOn ? 'Microphone unmuted' : 'Microphone muted');
     });
   }
 
@@ -1769,7 +1963,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         safeSocketEmit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
       }
       updateParticipantsListUI();
-      showToast(localState.videoOn ? 'Camera turned on' : 'Camera turned off');
+      EM.showNotification(localState.videoOn ? 'Camera turned on' : 'Camera turned off');
     });
   }
 
@@ -1789,12 +1983,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         safeSocketEmit('toggle-hand-raise', { handRaised: localState.handRaised });
       }
       updateParticipantsListUI();
-      showToast(localState.handRaised ? 'Hand raised' : 'Hand lowered');
+      EM.showNotification(localState.handRaised ? 'Hand raised' : 'Hand lowered');
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 13. Sidebar Tabs & Toggles
+  // 15. Sidebar Tabs & Toggles
   // ---------------------------------------------------------------------------
   const sidebar = document.getElementById('sidebar');
 
@@ -1871,7 +2065,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 14. Chat Form & XSS-Immune Message Rendering
+  // 16. Chat Form & XSS-Immune Message Rendering
   // ---------------------------------------------------------------------------
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
@@ -1893,7 +2087,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           message: encrypted.encrypted ? null : msg
         });
       } catch (err) {
-        console.error('[E2EE] Error encrypting chat message:', err);
+        EM.logger.error(CAT.CHAT, 'send', 'Error encrypting chat message:', { error: err.message });
         safeSocketEmit('send-chat-message', { message: msg });
       }
     });
@@ -1968,29 +2162,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!toast || !msgEl) return;
 
     msgEl.textContent = message;
-    toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 3000);
+    toast.className = 'toast-notification show';
+    if (type === 'danger' || type === 'error') {
+      toast.classList.add('toast-danger');
+    } else if (type === 'warning') {
+      toast.classList.add('toast-warning');
+    } else if (type === 'success') {
+      toast.classList.add('toast-success');
+    } else {
+      toast.classList.add('toast-info');
+    }
+
+    if (toast._timer) clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => toast.classList.remove('show'), 3500);
   }
 
   // ---------------------------------------------------------------------------
-  // 15. Room Link Sharing (Includes E2EE Key Fragment)
+  // 17. Room Link Sharing (Includes E2EE Key Fragment)
   // ---------------------------------------------------------------------------
   const copyBtn = document.getElementById('copy-room-link-btn');
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       const fullUrl = window.location.origin + `/room?room=${encodeURIComponent(roomId)}${window.location.hash}`;
       navigator.clipboard.writeText(fullUrl).then(() => {
-        showToast('Secure room invite link (with E2EE key) copied!');
+        EM.showNotification('Secure room invite link (with E2EE key) copied!');
       }).catch(() => {
-        showToast(`Room ID: ${roomId}`);
+        EM.showNotification(`Room ID: ${roomId}`);
       });
     });
   }
 
   // ---------------------------------------------------------------------------
-  // 16. Comprehensive Room Teardown & Resource Cleanup
+  // 18. Comprehensive Room Teardown & Resource Cleanup
   // ---------------------------------------------------------------------------
   function cleanupRoomResources() {
+    EM.logger.info(CAT.UNKNOWN, 'teardown', 'Cleaning up all room media, peer connections, and channels.');
+
     if (localStream) {
       localStream.getTracks().forEach(track => {
         try { track.stop(); } catch (_) {}
@@ -2016,6 +2223,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     peerConnections.clear();
     dataChannels.clear();
     iceCandidateQueues.clear();
+    peerRetryCounts.clear();
 
     for (const url of activeObjectUrls) {
       try { URL.revokeObjectURL(url); } catch (_) {}
@@ -2026,6 +2234,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (transfer.timeoutId) clearTimeout(transfer.timeoutId);
     }
     activeIncomingTransfers.clear();
+    senderFileRegistry.clear();
 
     if (socket) {
       try { socket.disconnect(); } catch (_) {}

@@ -11,11 +11,23 @@
 const crypto = require('crypto');
 const subtle = crypto.webcrypto.subtle;
 
-// Helper: Packet creation matching client.js
-function createChunkPacket(transferId, chunkIndex, totalChunks, encryptedChunkBuffer) {
+// Helper: Adler-32 Checksum
+function computeAdler32(arrayBuffer) {
+  let a = 1, b = 0;
+  const bytes = new Uint8Array(arrayBuffer);
+  const len = bytes.length;
+  for (let i = 0; i < len; i++) {
+    a = (a + bytes[i]) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+// Helper: Packet creation matching client.js with 32-bit checksum
+function createChunkPacket(transferId, chunkIndex, totalChunks, checksum, encryptedChunkBuffer) {
   const enc = new TextEncoder();
   const idBytes = enc.encode(transferId);
-  const headerSize = 1 + 1 + idBytes.length + 4 + 4;
+  const headerSize = 1 + 1 + idBytes.length + 4 + 4 + 4;
   const packet = new Uint8Array(headerSize + encryptedChunkBuffer.byteLength);
   const view = new DataView(packet.buffer);
 
@@ -28,21 +40,23 @@ function createChunkPacket(transferId, chunkIndex, totalChunks, encryptedChunkBu
   offset += 4;
   view.setUint32(offset, totalChunks, false);
   offset += 4;
+  view.setUint32(offset, checksum, false);
+  offset += 4;
   packet.set(new Uint8Array(encryptedChunkBuffer), offset);
 
   return packet.buffer;
 }
 
-// Helper: Packet parsing matching client.js
+// Helper: Packet parsing matching client.js with checksum
 function parseChunkPacket(arrayBuffer) {
-  if (arrayBuffer.byteLength < 10) return null;
+  if (arrayBuffer.byteLength < 14) return null;
   const view = new DataView(arrayBuffer);
   let offset = 0;
   const msgType = view.getUint8(offset++);
   if (msgType !== 0x01) return null;
 
   const idLen = view.getUint8(offset++);
-  if (arrayBuffer.byteLength < 2 + idLen + 8) return null;
+  if (arrayBuffer.byteLength < 2 + idLen + 12) return null;
 
   const dec = new TextDecoder();
   const transferId = dec.decode(new Uint8Array(arrayBuffer, offset, idLen));
@@ -52,9 +66,11 @@ function parseChunkPacket(arrayBuffer) {
   offset += 4;
   const totalChunks = view.getUint32(offset, false);
   offset += 4;
+  const checksum = view.getUint32(offset, false);
+  offset += 4;
 
   const payload = arrayBuffer.slice(offset);
-  return { transferId, chunkIndex, totalChunks, payload };
+  return { transferId, chunkIndex, totalChunks, checksum, payload };
 }
 
 // AES-GCM Encrypt/Decrypt Helpers
@@ -99,10 +115,11 @@ async function runProtocolTests() {
   const transferId1 = 'tx_test_1001';
   const sampleData = Buffer.from('NexusMeet encrypted block payload for chunk testing 12345');
   const encChunk = await encryptBinaryChunk(aesKey, sampleData);
-  const packetBuffer = createChunkPacket(transferId1, 2, 5, encChunk);
+  const checksum1 = computeAdler32(encChunk);
+  const packetBuffer = createChunkPacket(transferId1, 2, 5, checksum1, encChunk);
 
   const parsed = parseChunkPacket(packetBuffer);
-  if (!parsed || parsed.transferId !== transferId1 || parsed.chunkIndex !== 2 || parsed.totalChunks !== 5) {
+  if (!parsed || parsed.transferId !== transferId1 || parsed.chunkIndex !== 2 || parsed.totalChunks !== 5 || parsed.checksum !== checksum1) {
     throw new Error('Test 1 Failed: Packet parsing mismatch');
   }
   const decChunk = await decryptBinaryChunk(aesKey, parsed.payload);
@@ -124,7 +141,8 @@ async function runProtocolTests() {
   for (let i = 0; i < totalChunks; i++) {
     const slice = fullBuffer.subarray(i * CHUNK_SIZE, Math.min((i + 1) * CHUNK_SIZE, fullBuffer.length));
     const encrypted = await encryptBinaryChunk(aesKey, slice);
-    const pkt = createChunkPacket(transferId2, i, totalChunks, encrypted);
+    const checksum = computeAdler32(encrypted);
+    const pkt = createChunkPacket(transferId2, i, totalChunks, checksum, encrypted);
     packets.push(pkt);
   }
 
@@ -135,6 +153,10 @@ async function runProtocolTests() {
   const receiverStore = new Map();
   for (const pkt of shuffledPackets) {
     const p = parseChunkPacket(pkt);
+    const calculatedChecksum = computeAdler32(p.payload);
+    if (calculatedChecksum !== p.checksum) {
+      throw new Error('Test 2 Failed: Checksum mismatch on valid packet');
+    }
     const decrypted = await decryptBinaryChunk(aesKey, p.payload);
     receiverStore.set(p.chunkIndex, decrypted);
   }
@@ -161,8 +183,10 @@ async function runProtocolTests() {
   const fileA = Buffer.from('Alpha File Contents: Secret Document A');
   const fileB = Buffer.from('Beta File Contents: Secret Document B');
 
-  const pktA = createChunkPacket(transferA, 0, 1, await encryptBinaryChunk(aesKey, fileA));
-  const pktB = createChunkPacket(transferB, 0, 1, await encryptBinaryChunk(aesKey, fileB));
+  const encA = await encryptBinaryChunk(aesKey, fileA);
+  const encB = await encryptBinaryChunk(aesKey, fileB);
+  const pktA = createChunkPacket(transferA, 0, 1, computeAdler32(encA), encA);
+  const pktB = createChunkPacket(transferB, 0, 1, computeAdler32(encB), encB);
 
   const multiTransferStore = {
     [transferA]: [],
@@ -184,6 +208,23 @@ async function runProtocolTests() {
     throw new Error('Test 3 Failed: Transfer B contaminated');
   }
   console.log('✅ Test 3 Passed: Concurrent transfers properly isolated by transferId.\n');
+
+  // Test 5: Rejection of corrupted chunk via checksum
+  console.log('Test 5: Detection and rejection of corrupted binary chunk...');
+  const legitPayload = await encryptBinaryChunk(aesKey, Buffer.from('Critical file data'));
+  const legitChecksum = computeAdler32(legitPayload);
+  const goodPacket = createChunkPacket('tx_corrupt_test', 0, 1, legitChecksum, legitPayload);
+
+  // Intentionally flip byte in payload
+  const corruptedPacket = new Uint8Array(goodPacket);
+  corruptedPacket[corruptedPacket.length - 1] ^= 0xFF; // Mutate last byte
+
+  const parsedCorrupt = parseChunkPacket(corruptedPacket.buffer);
+  const check = computeAdler32(parsedCorrupt.payload);
+  if (check === parsedCorrupt.checksum) {
+    throw new Error('Test 5 Failed: Corrupted chunk was not detected by checksum');
+  }
+  console.log('✅ Test 5 Passed: Corrupted chunk detected and rejected via checksum mismatch.\n');
 
   // Test 4: ICE candidate queue flushing logic simulation
   console.log('Test 4: ICE candidate queuing before remoteDescription set...');
