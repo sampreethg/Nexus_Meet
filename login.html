@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusMeet | Secure Authentication</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="styles.css">
+  
+  <style>
+    .auth-page-container {
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      background: radial-gradient(circle at 50% 15%, #18181c 0%, #09090b 80%);
+    }
+
+    .auth-card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-lg);
+      padding: 2rem 1.75rem;
+      box-shadow: var(--shadow-elevation-2);
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .auth-brand-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 0.5rem;
+    }
+
+    .auth-logo {
+      width: 44px;
+      height: 44px;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-active);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.25rem;
+      color: var(--accent-signal);
+      box-shadow: var(--shadow-elevation-1);
+    }
+
+    .auth-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.02em;
+    }
+
+    .auth-subtitle {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .auth-nav-tabs {
+      display: flex;
+      background: var(--bg-app);
+      padding: 0.25rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-subtle);
+      gap: 0.25rem;
+    }
+
+    .auth-tab-btn {
+      flex: 1;
+      padding: 0.45rem;
+      background: transparent;
+      border: none;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 0.82rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: var(--transition-tactile);
+      text-align: center;
+    }
+
+    .auth-tab-btn.active {
+      background: var(--bg-surface-elevated);
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .form-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 0.6rem 0.85rem;
+      background: var(--bg-app);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-size: 0.88rem;
+      font-family: inherit;
+      outline: none;
+      transition: var(--transition-tactile);
+    }
+
+    .form-input:focus {
+      border-color: var(--accent-signal);
+      box-shadow: 0 0 0 1px var(--accent-signal);
+    }
+
+    .field-error-msg {
+      font-size: 0.75rem;
+      color: var(--status-danger);
+      display: none;
+      margin-top: 0.15rem;
+    }
+
+    .form-banner-error {
+      padding: 0.65rem 0.85rem;
+      background: rgba(225, 29, 72, 0.1);
+      border: 1px solid rgba(225, 29, 72, 0.3);
+      border-radius: var(--radius-sm);
+      color: #fecdd3;
+      font-size: 0.8rem;
+      display: none;
+      align-items: center;
+      gap: 0.45rem;
+    }
+
+    .btn-auth-submit {
+      width: 100%;
+      padding: 0.65rem;
+      background: var(--accent-signal);
+      border: none;
+      border-radius: var(--radius-sm);
+      color: #fff;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      transition: var(--transition-tactile);
+      margin-top: 0.5rem;
+    }
+
+    .btn-auth-submit:hover {
+      background: var(--accent-signal-hover);
+    }
+
+    .btn-auth-submit:active {
+      transform: translateY(1px);
+    }
+
+    .auth-footer-text {
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="auth-page-container">
+    <div class="auth-card">
+      
+      <!-- Brand Header -->
+      <div class="auth-brand-header">
+        <div class="auth-logo">
+          <i class="fa-solid fa-shield-halved"></i>
+        </div>
+        <h1 class="auth-title">NexusMeet Authentication</h1>
+        <p class="auth-subtitle">Encrypted WebRTC Conferencing & Collaboration</p>
+      </div>
+
+      <!-- Auth Switcher Tabs -->
+      <div class="auth-nav-tabs">
+        <button id="tab-login-btn" class="auth-tab-btn active">Sign In</button>
+        <button id="tab-register-btn" class="auth-tab-btn">Create Account</button>
+      </div>
+
+      <!-- General Form Error Banner -->
+      <div id="auth-banner-error" class="form-banner-error">
+        <i class="fa-solid fa-circle-exclamation"></i>
+        <span id="auth-error-text">Invalid credentials.</span>
+      </div>
+
+      <!-- Sign In Form -->
+      <form id="login-form" class="auth-form">
+        <div class="form-group">
+          <label class="form-label" for="login-identifier">Email or Username</label>
+          <input 
+            type="text" 
+            id="login-identifier" 
+            class="form-input" 
+            placeholder="alex or alex@example.com" 
+            autocomplete="username" 
+            required
+          >
+          <span id="login-identifier-error" class="field-error-msg"></span>
+        </div>
+
+        <div class="form-group" style="margin-top: 0.75rem;">
+          <label class="form-label" for="login-password">Password</label>
+          <input 
+            type="password" 
+            id="login-password" 
+            class="form-input" 
+            placeholder="••••••••" 
+            autocomplete="current-password" 
+            required
+          >
+          <span id="login-password-error" class="field-error-msg"></span>
+        </div>
+
+        <button type="submit" id="btn-login-submit" class="btn-auth-submit">
+          <span>Sign In to Conference</span>
+          <i class="fa-solid fa-arrow-right"></i>
+        </button>
+      </form>
+
+      <!-- Register Form -->
+      <form id="register-form" class="auth-form" style="display: none;">
+        <div class="form-group">
+          <label class="form-label" for="reg-username">Username</label>
+          <input 
+            type="text" 
+            id="reg-username" 
+            class="form-input" 
+            placeholder="Choose username (e.g. alex_smith)" 
+            autocomplete="username" 
+            required
+          >
+          <span id="reg-username-error" class="field-error-msg"></span>
+        </div>
+
+        <div class="form-group" style="margin-top: 0.75rem;">
+          <label class="form-label" for="reg-email">Work / Personal Email</label>
+          <input 
+            type="email" 
+            id="reg-email" 
+            class="form-input" 
+            placeholder="name@domain.com" 
+            autocomplete="email" 
+            required
+          >
+          <span id="reg-email-error" class="field-error-msg"></span>
+        </div>
+
+        <div class="form-group" style="margin-top: 0.75rem;">
+          <label class="form-label" for="reg-password">Password</label>
+          <input 
+            type="password" 
+            id="reg-password" 
+            class="form-input" 
+            placeholder="Minimum 6 characters" 
+            autocomplete="new-password" 
+            required
+          >
+          <span id="reg-password-error" class="field-error-msg"></span>
+        </div>
+
+        <button type="submit" id="btn-register-submit" class="btn-auth-submit">
+          <span>Create Account</span>
+          <i class="fa-solid fa-user-plus"></i>
+        </button>
+      </form>
+
+      <div class="auth-footer-text">
+        <span>Protected by Salted bcryptjs & Signed JWT Handshake Protocols</span>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="auth-client.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', async () => {
+      // If already authenticated, redirect directly to Lobby
+      const existingUser = await apiFetchProfile();
+      if (existingUser) {
+        window.location.href = '/lobby';
+        return;
+      }
+
+      const tabLoginBtn = document.getElementById('tab-login-btn');
+      const tabRegisterBtn = document.getElementById('tab-register-btn');
+      const loginForm = document.getElementById('login-form');
+      const registerForm = document.getElementById('register-form');
+      const bannerError = document.getElementById('auth-banner-error');
+      const errorText = document.getElementById('auth-error-text');
+
+      function showBannerError(msg) {
+        errorText.textContent = msg;
+        bannerError.style.display = 'flex';
+      }
+
+      function hideBannerError() {
+        bannerError.style.display = 'none';
+      }
+
+      // Tab Switcher
+      tabLoginBtn.addEventListener('click', () => {
+        tabLoginBtn.classList.add('active');
+        tabRegisterBtn.classList.remove('active');
+        loginForm.style.display = 'block';
+        registerForm.style.display = 'none';
+        hideBannerError();
+      });
+
+      tabRegisterBtn.addEventListener('click', () => {
+        tabRegisterBtn.classList.add('active');
+        tabLoginBtn.classList.remove('active');
+        registerForm.style.display = 'block';
+        loginForm.style.display = 'none';
+        hideBannerError();
+      });
+
+      // Login Submission
+      loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        hideBannerError();
+        const identifier = document.getElementById('login-identifier').value.trim();
+        const password = document.getElementById('login-password').value;
+
+        const submitBtn = document.getElementById('btn-login-submit');
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Authenticating...';
+
+        try {
+          await apiLogin(identifier, password);
+          window.location.href = '/lobby';
+        } catch (err) {
+          showBannerError(err.message);
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>Sign In to Conference</span> <i class="fa-solid fa-arrow-right"></i>';
+        }
+      });
+
+      // Register Submission
+      registerForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        hideBannerError();
+        const username = document.getElementById('reg-username').value.trim();
+        const email = document.getElementById('reg-email').value.trim();
+        const password = document.getElementById('reg-password').value;
+
+        const submitBtn = document.getElementById('btn-register-submit');
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating Account...';
+
+        try {
+          await apiRegister(username, email, password);
+          window.location.href = '/lobby';
+        } catch (err) {
+          showBannerError(err.message);
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<span>Create Account</span> <i class="fa-solid fa-user-plus"></i>';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

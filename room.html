@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusMeet | WebRTC Conference & Real-Time Collaborative Canvas</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app-container">
+    
+    <!-- App Header -->
+    <header class="app-header">
+      <div class="brand-section">
+        <a href="/lobby" class="brand-logo" title="Back to Lobby" style="text-decoration: none;">
+          <i class="fa-solid fa-cube"></i>
+        </a>
+        <span class="brand-title">NexusMeet</span>
+        <div class="room-info-badge">
+          <span class="status-dot" id="connection-status-dot"></span>
+          <span id="room-display-id">Room: Loading...</span>
+        </div>
+        <!-- Sleek Taste Skill E2EE Indicator -->
+        <div class="e2ee-status-badge" id="e2ee-badge" title="End-to-End Encryption (AES-256-GCM) Active • Zero-Knowledge Architecture">
+          <i class="fa-solid fa-lock e2ee-lock-icon"></i>
+          <span class="e2ee-label">E2EE Active</span>
+          <span class="e2ee-cipher-tag">AES-256</span>
+        </div>
+      </div>
+      <div class="header-actions">
+        <a href="/lobby" class="btn-secondary" title="Return to Lobby" style="text-decoration: none;">
+          <i class="fa-solid fa-house"></i>
+          <span>Lobby</span>
+        </a>
+        <button id="copy-room-link-btn" class="btn-secondary" title="Copy Room Invite Link">
+          <i class="fa-regular fa-copy"></i>
+          <span>Copy Link</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Stage Workspace -->
+    <div class="main-stage">
+      
+      <!-- Video Grid Stage -->
+      <main class="video-stage-container">
+        <div id="video-grid" data-participants="0"></div>
+
+        <!-- Real-Time Collaborative Whiteboard Overlay -->
+        <div id="whiteboard-overlay" class="whiteboard-overlay hidden">
+          <div class="whiteboard-header">
+            <div class="whiteboard-title-group">
+              <i class="fa-solid fa-pen-nib"></i>
+              <span>Collaborative Canvas</span>
+              <span class="whiteboard-sync-badge"><i class="fa-solid fa-arrows-rotate"></i> Live P2P Sync</span>
+            </div>
+            <div class="whiteboard-header-actions">
+              <button id="export-whiteboard-btn" class="btn-tool" title="Export PNG Image">
+                <i class="fa-solid fa-download"></i>
+                <span>Snapshot</span>
+              </button>
+              <button id="close-whiteboard-btn" class="btn-tool" title="Close Canvas">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Minimal Floating Drawing Palette Dock -->
+          <div class="drawing-palette-dock">
+            <div class="tool-group">
+              <button id="tool-pen" class="palette-btn active" title="Pen Tool" data-tool="pen">
+                <i class="fa-solid fa-pen"></i>
+              </button>
+              <button id="tool-eraser" class="palette-btn" title="Eraser Tool" data-tool="eraser">
+                <i class="fa-solid fa-eraser"></i>
+              </button>
+            </div>
+
+            <div class="dock-divider"></div>
+
+            <!-- Custom Neutral & High-Contrast Swatches -->
+            <div class="swatch-group">
+              <button class="color-swatch active" data-color="#fafafa" style="background: #fafafa;" title="Zinc White"></button>
+              <button class="color-swatch" data-color="#3b82f6" style="background: #3b82f6;" title="Signal Blue"></button>
+              <button class="color-swatch" data-color="#10b981" style="background: #10b981;" title="Emerald Green"></button>
+              <button class="color-swatch" data-color="#f59e0b" style="background: #f59e0b;" title="Amber Gold"></button>
+              <button class="color-swatch" data-color="#f43f5e" style="background: #f43f5e;" title="Rose Red"></button>
+            </div>
+
+            <div class="dock-divider"></div>
+
+            <!-- Stroke Thickness Selector -->
+            <div class="width-group">
+              <button class="width-btn active" data-width="2" title="Fine Stroke (2px)">
+                <span class="width-dot" style="width: 3px; height: 3px;"></span>
+              </button>
+              <button class="width-btn" data-width="6" title="Medium Stroke (6px)">
+                <span class="width-dot" style="width: 6px; height: 6px;"></span>
+              </button>
+              <button class="width-btn" data-width="14" title="Thick Stroke (14px)">
+                <span class="width-dot" style="width: 10px; height: 10px;"></span>
+              </button>
+            </div>
+
+            <div class="dock-divider"></div>
+
+            <button id="clear-whiteboard-btn" class="palette-btn danger" title="Clear Canvas">
+              <i class="fa-regular fa-trash-can"></i>
+            </button>
+          </div>
+
+          <!-- Canvas Drawing Surface -->
+          <div class="canvas-wrapper">
+            <canvas id="whiteboard-canvas"></canvas>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- Sidebar Area (Chat, Files, Peers) -->
+      <aside id="sidebar" class="app-sidebar">
+        <div class="sidebar-header">
+          <nav class="sidebar-tabs">
+            <button id="tab-chat-btn" class="tab-btn active" data-tab="chat">
+              <i class="fa-regular fa-comments"></i>
+              <span>Chat</span>
+            </button>
+            <button id="tab-files-btn" class="tab-btn" data-tab="files">
+              <i class="fa-solid fa-folder-open"></i>
+              <span>Files</span>
+              <span id="tab-files-count" class="badge-count" style="display: none;">0</span>
+            </button>
+            <button id="tab-participants-btn" class="tab-btn" data-tab="participants">
+              <i class="fa-solid fa-users"></i>
+              <span>Peers</span>
+              <span id="tab-participant-count" class="badge-count">1</span>
+            </button>
+          </nav>
+        </div>
+
+        <div class="sidebar-content">
+          
+          <!-- Chat Panel -->
+          <section id="chat-panel" class="tab-panel">
+            <div id="chat-messages" class="chat-message-list"></div>
+            <form id="chat-form" class="chat-input-area">
+              <input type="text" id="chat-input" class="chat-input" placeholder="Type a message..." autocomplete="off" required>
+              <button type="submit" id="send-chat-btn" class="btn-send"><i class="fa-solid fa-paper-plane"></i></button>
+            </form>
+          </section>
+
+          <!-- P2P File Sharing Panel -->
+          <section id="files-panel" class="tab-panel hidden">
+            <div class="files-panel-container">
+              
+              <div id="file-dropzone" class="file-dropzone">
+                <input type="file" id="file-input" class="hidden-file-input">
+                <div class="dropzone-icon">
+                  <i class="fa-solid fa-cloud-arrow-up"></i>
+                </div>
+                <div class="dropzone-title">
+                  Drop file or <span class="dropzone-browse">browse</span>
+                </div>
+                <div class="dropzone-subtitle">Direct WebRTC DataChannel • Zero Server Storage</div>
+              </div>
+
+              <div class="files-section-label">Active Transfers & Downloads</div>
+              <div id="files-transfers-list" class="files-transfers-list"></div>
+
+            </div>
+          </section>
+
+          <!-- Peers Panel -->
+          <section id="participants-panel" class="tab-panel hidden">
+            <div id="participants-list" class="participants-list"></div>
+          </section>
+
+        </div>
+      </aside>
+
+    </div>
+
+    <!-- Bottom Floating Dock -->
+    <footer class="control-dock-container">
+      <div class="control-dock">
+        <!-- Audio Mic -->
+        <button id="toggle-mic" class="control-btn active" title="Toggle Microphone"><i class="fa-solid fa-microphone"></i></button>
+        <!-- Camera Video -->
+        <button id="toggle-video" class="control-btn active" title="Toggle Camera"><i class="fa-solid fa-video"></i></button>
+        <!-- Screen Sharing -->
+        <button id="toggle-screenshare" class="control-btn" title="Share Screen"><i class="fa-solid fa-desktop"></i></button>
+        <!-- Real-Time Collaborative Whiteboard Toggle -->
+        <button id="toggle-whiteboard-btn" class="control-btn" title="Open Collaborative Canvas"><i class="fa-solid fa-pen-nib"></i></button>
+        <!-- Hand Raise -->
+        <button id="toggle-hand" class="control-btn" title="Raise / Lower Hand"><i class="fa-regular fa-hand"></i></button>
+        
+        <div class="dock-divider"></div>
+        
+        <!-- Files Tab Toggle -->
+        <button id="toggle-files-btn" class="control-btn" title="P2P File Transfers">
+          <i class="fa-solid fa-folder-open"></i>
+        </button>
+        <!-- Peers Sidebar -->
+        <button id="toggle-participants-btn" class="control-btn" title="Show/Hide Peers">
+          <i class="fa-solid fa-users"></i>
+          <span id="dock-participant-badge" class="badge-count">1</span>
+        </button>
+        <!-- Chat Sidebar -->
+        <button id="toggle-chat-btn" class="control-btn active" title="Show/Hide Chat">
+          <i class="fa-regular fa-comments"></i>
+          <span id="unread-chat-dot" class="badge-dot" style="display: none;"></span>
+        </button>
+        
+        <div class="dock-divider"></div>
+        
+        <!-- Leave Conference -->
+        <button id="leave-call-btn" class="control-btn danger" title="Leave Conference">
+          <i class="fa-solid fa-phone-slash" style="margin-right: 0.35rem;"></i>
+          <span>Leave</span>
+        </button>
+      </div>
+    </footer>
+
+  </div>
+
+  <div id="toast" class="toast-notification">
+    <i class="fa-solid fa-circle-info" style="color: var(--status-live);"></i>
+    <span id="toast-message">Notification</span>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="auth-client.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>

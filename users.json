@@ -1,0 +1,58 @@
+[
+  {
+    "id": "usr_1790777611259_7mj5h7",
+    "username": "tester_2100",
+    "email": "tester_1790777610933@nexusmeet.com",
+    "passwordHash": "$2b$10$FEXaGoZc6vLu.wX0.mS69eVuirFIqf9N5Enqkjs6GMjMe4D.rtS5u",
+    "createdAt": "2026-09-30T14:13:31.260Z"
+  },
+  {
+    "id": "usr_1790777701946_30rmpc",
+    "username": "sampreeth",
+    "email": "sampreeth032@gmail.com",
+    "passwordHash": "$2b$10$jgDqPJizKHF.mKRnokDwXuRGhqFln/MPByo3wChJH3J1JMKfY83.y",
+    "createdAt": "2026-09-30T14:15:01.946Z"
+  },
+  {
+    "id": "usr_1790781357488_hxqif6",
+    "username": "tester_3465",
+    "email": "tester_1790781356976@nexusmeet.com",
+    "passwordHash": "$2b$10$jqyHv0lHtYkapIMz7WG6c.0Yp1VAOX3txwV8sDN3FQzt.k.a2bd/W",
+    "createdAt": "2026-09-30T15:15:57.488Z"
+  },
+  {
+    "id": "usr_1790781398468_fv4fa9",
+    "username": "wb_alice_8406",
+    "email": "wba_1790781398406@test.local",
+    "passwordHash": "$2b$10$JhILh5xlw9x2T7tciNoVneg9bva7/Vl3Nt1eagADC0vZV3N5mky0.",
+    "createdAt": "2026-09-30T15:16:38.468Z"
+  },
+  {
+    "id": "usr_1790781398527_evj6zs",
+    "username": "wb_bob_8471",
+    "email": "wbb_1790781398471@test.local",
+    "passwordHash": "$2b$10$o3nCYqMBDovWLxsojv4PQe5uwaO0ZA/R03eCL9Z6aGCszlz4BGVbq",
+    "createdAt": "2026-09-30T15:16:38.527Z"
+  },
+  {
+    "id": "usr_1790781398586_aarpml",
+    "username": "wb_charlie_8529",
+    "email": "wbc_1790781398529@test.local",
+    "passwordHash": "$2b$10$DmKsXDQBMqbKo6bdM4AaKeEYtyUA13JYIODaZt0i5J4dSmcYAFmmK",
+    "createdAt": "2026-09-30T15:16:38.586Z"
+  },
+  {
+    "id": "usr_1790781427658_7gvvnc",
+    "username": "dc_alice_7588",
+    "email": "dca_1790781427588@test.local",
+    "passwordHash": "$2b$10$nv0gJL8ZTlF88CIy8NSYruvfbv0t7ymlYEftT5S1eRvW5aeJ3hfmi",
+    "createdAt": "2026-09-30T15:17:07.658Z"
+  },
+  {
+    "id": "usr_1790781427743_byjghn",
+    "username": "dc_bob_7662",
+    "email": "dcb_1790781427662@test.local",
+    "passwordHash": "$2b$10$uFY8yWdlbpSTUzWfp30eH.EhjPcu3qup8I0ambv2QpO2Q5.veBTMC",
+    "createdAt": "2026-09-30T15:17:07.743Z"
+  }
+]

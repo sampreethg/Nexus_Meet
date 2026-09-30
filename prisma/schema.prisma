@@ -1,0 +1,37 @@
+// Prisma Schema for NexusMeet Stateless Serverless Architecture
+// Specifies PostgreSQL database connection and data models
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// User account model for authentication
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+// Room session model for persistent meeting rooms
+model Room {
+  id        String             @id
+  name      String?
+  createdAt DateTime           @default(now())
+  strokes   WhiteboardStroke[]
+}
+
+// Whiteboard stroke history model for persistent room drawings
+model WhiteboardStroke {
+  id         String   @id @default(uuid())
+  roomId     String
+  room       Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  strokeData Json
+  createdAt  DateTime @default(now())
+}
