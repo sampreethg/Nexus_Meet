@@ -283,41 +283,50 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // 3. Authenticated Socket.io Connection (Handshake with JWT & Forced WebSocket)
   // ---------------------------------------------------------------------------
-  const socket = io({
-    auth: {
-      token: token
-    },
-    transports: ['websocket'],
-    upgrade: false
-  });
+  let socket = null;
+  if (typeof io !== 'undefined') {
+    socket = io({
+      auth: {
+        token: token
+      },
+      transports: ['websocket'],
+      upgrade: false
+    });
+  } else {
+    console.warn('[Socket] Socket.io client library unavailable.');
+  }
 
   const statusDot = document.getElementById('connection-status-dot');
 
-  socket.on('connect_error', (err) => {
-    console.error('[Socket Auth Error]', err.message);
-    if (err.message.includes('AUTHENTICATION_ERROR')) {
-      showToast('Session expired. Please log in again.', 'warning');
-      clearAuthSession();
-      setTimeout(() => window.location.href = '/login', 1500);
-    }
-  });
-
-  socket.on('connect', () => {
-    localState.socketId = socket.id;
-    statusDot.style.backgroundColor = 'var(--status-live)';
-    statusDot.style.boxShadow = '0 0 6px var(--status-live)';
-
-    socket.emit('join-room', {
-      roomId: roomId,
-      micOn: localState.micOn,
-      videoOn: localState.videoOn
+  if (socket) {
+    socket.on('connect_error', (err) => {
+      console.error('[Socket Auth Error]', err.message);
+      if (err.message.includes('AUTHENTICATION_ERROR')) {
+        showToast('Session expired. Please log in again.', 'warning');
+        clearAuthSession();
+        setTimeout(() => window.location.href = '/login', 1500);
+      }
     });
-  });
 
-  socket.on('disconnect', () => {
-    statusDot.style.backgroundColor = 'var(--status-danger)';
-    showToast('Disconnected from room server', 'warning');
-  });
+    socket.on('connect', () => {
+      localState.socketId = socket.id;
+      if (statusDot) {
+        statusDot.style.backgroundColor = 'var(--status-live)';
+        statusDot.style.boxShadow = '0 0 6px var(--status-live)';
+      }
+
+      socket.emit('join-room', {
+        roomId: roomId,
+        micOn: localState.micOn,
+        videoOn: localState.videoOn
+      });
+    });
+
+    socket.on('disconnect', () => {
+      if (statusDot) statusDot.style.backgroundColor = 'var(--status-danger)';
+      showToast('Disconnected from room server', 'warning');
+    });
+  }
 
   socket.on('room-users', async ({ self, users }) => {
     const videoGrid = document.getElementById('video-grid');
@@ -1213,8 +1222,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     micBtn.className = `control-btn ${localState.micOn ? 'active' : 'muted'}`;
     micBtn.innerHTML = `<i class="fa-solid ${localState.micOn ? 'fa-microphone' : 'fa-microphone-slash'}"></i>`;
 
-    updateParticipantTileState(socket.id, localState.micOn, localState.videoOn);
-    socket.emit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
+    if (socket) {
+      updateParticipantTileState(socket.id, localState.micOn, localState.videoOn);
+      socket.emit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
+    }
     updateParticipantsListUI();
     showToast(localState.micOn ? 'Microphone unmuted' : 'Microphone muted');
   });
@@ -1232,8 +1243,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     videoBtn.className = `control-btn ${localState.videoOn ? 'active' : 'off'}`;
     videoBtn.innerHTML = `<i class="fa-solid ${localState.videoOn ? 'fa-video' : 'fa-video-slash'}"></i>`;
 
-    updateParticipantTileState(socket.id, localState.micOn, localState.videoOn);
-    socket.emit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
+    if (socket) {
+      updateParticipantTileState(socket.id, localState.micOn, localState.videoOn);
+      socket.emit('toggle-media-state', { micOn: localState.micOn, videoOn: localState.videoOn });
+    }
     updateParticipantsListUI();
     showToast(localState.videoOn ? 'Camera turned on' : 'Camera turned off');
   });
@@ -1245,8 +1258,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     localState.handRaised = !localState.handRaised;
     handBtn.classList.toggle('active', localState.handRaised);
 
-    updateHandRaiseBadgeUI(socket.id, localState.handRaised);
-    socket.emit('toggle-hand-raise', { handRaised: localState.handRaised });
+    if (socket) {
+      updateHandRaiseBadgeUI(socket.id, localState.handRaised);
+      socket.emit('toggle-hand-raise', { handRaised: localState.handRaised });
+    }
     updateParticipantsListUI();
     showToast(localState.handRaised ? 'Hand raised' : 'Hand lowered');
   });
