@@ -189,17 +189,13 @@ io.on('connection', (socket) => {
     socket.data.userInfo = userInfo;
     socket.join(roomId);
 
-    // Upsert Room session in PostgreSQL DB via Prisma
+    // Non-blocking upsert for Room session in PostgreSQL DB via Prisma
     if (prisma && process.env.DATABASE_URL) {
-      try {
-        await prisma.room.upsert({
-          where: { id: roomId },
-          update: {},
-          create: { id: roomId, name: roomId }
-        });
-      } catch (err) {
-        console.warn(`[Prisma Room Upsert Fallback] ${err.message}`);
-      }
+      prisma.room.upsert({
+        where: { id: roomId },
+        update: {},
+        create: { id: roomId, name: roomId }
+      }).catch(err => console.warn(`[Prisma Room Upsert Fallback] ${err.message}`));
     }
 
     // Retrieve active room participants across serverless instances via Redis adapter
@@ -220,14 +216,17 @@ io.on('connection', (socket) => {
       roomId: roomId
     });
 
-    // Retrieve persistent whiteboard history from PostgreSQL database
+    // Retrieve persistent whiteboard history from PostgreSQL database with 1.5s fast timeout
     let history = [];
     if (prisma && process.env.DATABASE_URL) {
       try {
-        const strokes = await prisma.whiteboardStroke.findMany({
-          where: { roomId: roomId },
-          orderBy: { createdAt: 'asc' }
-        });
+        const strokes = await Promise.race([
+          prisma.whiteboardStroke.findMany({
+            where: { roomId: roomId },
+            orderBy: { createdAt: 'asc' }
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('DB Timeout')), 1500))
+        ]);
         history = strokes.map(s => (typeof s.strokeData === 'string' ? JSON.parse(s.strokeData) : s.strokeData));
       } catch (err) {
         console.warn(`[Prisma History Fallback] ${err.message}`);

@@ -66,18 +66,23 @@ document.addEventListener('DOMContentLoaded', async () => {
    * before initializing RTCPeerConnection instances.
    */
   async function fetchTurnCredentials() {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2000);
     try {
       const response = await fetch('/api/webrtc/turn-credentials', {
         headers: {
           'Authorization': `Bearer ${token}`
-        }
+        },
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
       const data = await response.json();
       if (data.success && Array.isArray(data.iceServers)) {
         rtcConfig.iceServers = data.iceServers;
         console.log('[WebRTC] Dynamic STUN/TURN server credentials loaded successfully:', rtcConfig.iceServers);
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       console.warn('[WebRTC] Failed to fetch dynamic TURN credentials, using fallback STUN servers:', err);
     }
   }
