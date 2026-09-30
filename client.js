@@ -610,9 +610,26 @@ document.addEventListener('DOMContentLoaded', async () => {
       const state = pc.connectionState;
       EM.logger.info(CAT.WEBRTC, 'connectionState', `Peer ${targetSocketId} connectionState changed to: ${state}`);
 
+      const badge = document.getElementById(`peer-badge-${targetSocketId}`);
       if (state === 'connected') {
         peerRetryCounts.set(targetSocketId, 0);
+        if (badge) {
+          badge.textContent = 'CONNECTED';
+          badge.style.color = 'var(--status-live, #10b981)';
+          badge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        }
+      } else if (state === 'connecting') {
+        if (badge) {
+          badge.textContent = 'CONNECTING';
+          badge.style.color = '#f59e0b';
+          badge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
+        }
       } else if (state === 'failed') {
+        if (badge) {
+          badge.textContent = 'RETRYING';
+          badge.style.color = 'var(--status-danger, #ef4444)';
+          badge.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        }
         const retries = peerRetryCounts.get(targetSocketId) || 0;
         if (retries < 2) {
           peerRetryCounts.set(targetSocketId, retries + 1);
@@ -633,6 +650,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           EM.logger.error(CAT.WEBRTC, 'recovery', `Peer ${targetSocketId} connection permanently failed after ${retries} retries.`);
           EM.showNotification('Unable to connect to this participant. Connection unrecoverable.', 'danger');
           cleanUpPeerConnection(targetSocketId);
+        }
+      } else if (state === 'disconnected') {
+        if (badge) {
+          badge.textContent = 'DISCONNECTED';
+          badge.style.color = '#f59e0b';
+          badge.style.borderColor = 'rgba(245, 158, 11, 0.4)';
         }
       } else if (state === 'closed') {
         cleanUpPeerConnection(targetSocketId);
@@ -1146,6 +1169,13 @@ document.addEventListener('DOMContentLoaded', async () => {
       progress: 0,
       isEncrypted: true
     });
+
+    sharedFilesCount++;
+    const filesBadge = document.getElementById('tab-files-count');
+    if (filesBadge) {
+      filesBadge.style.display = 'inline-block';
+      filesBadge.textContent = sharedFilesCount.toString();
+    }
 
     const rawMetadata = JSON.stringify({
       fileName: file.name,
@@ -1807,7 +1837,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       </div>
 
-      <div class="quality-badge">${isSelf ? 'HOST' : 'PEER'}</div>
+      <div class="quality-badge" id="peer-badge-${user.socketId}">${isSelf ? 'HOST (YOU)' : 'CONNECTING'}</div>
 
       <div class="hand-raise-badge" id="hand-badge-${user.socketId}" style="display: ${user.handRaised ? 'flex' : 'none'};">
         <i class="fa-solid fa-hand"></i>

@@ -1367,3 +1367,46 @@ html, body {
     overflow-x: auto;
   }
 }
+
+@media (max-width: 600px) {
+  .control-dock-container {
+    padding: 0 0.25rem;
+  }
+
+  .control-dock {
+    gap: 0.35rem;
+    padding: 0.4rem 0.5rem;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .control-btn {
+    width: 38px;
+    height: 38px;
+    font-size: 0.95rem;
+    flex-shrink: 0;
+  }
+
+  .control-btn.danger {
+    padding: 0 0.5rem;
+  }
+
+  .dock-divider {
+    margin: 0 0.15rem;
+  }
+
+  .brand-title {
+    font-size: 0.95rem;
+  }
+
+  .room-info-badge {
+    padding: 0.2rem 0.4rem;
+    font-size: 0.72rem;
+  }
+
+  .e2ee-status-badge .e2ee-cipher-tag {
+    display: none;
+  }
+}
+

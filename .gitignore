@@ -4,6 +4,7 @@ node_modules/
 
 # Environment variables & secrets
 .env
+.env.example
 .env.local
 .env.production
 .env.development

@@ -2,9 +2,12 @@
   "name": "task_2",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "test": "node test-production-audit.js",
+    "test:resilience": "node test-resilience-failures.js",
+    "test:transfer": "node test-protocol-and-transfer.js"
   },
   "keywords": [],
   "author": "",
