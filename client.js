@@ -6,6 +6,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   // 1. Authentication Guard & Parameter Extraction
   // ---------------------------------------------------------------------------
+  const urlParams = new URLSearchParams(window.location.search);
+  const roomId = urlParams.get('room') || 'nexus-alpha';
+
+  // Set Room Header IMMEDIATELY so it never stays stuck on "Room: Loading..."
+  const roomHeaderEl = document.getElementById('room-display-id');
+  if (roomHeaderEl) {
+    roomHeaderEl.textContent = `Room: ${roomId}`;
+  }
+
   const token = getAuthToken();
   if (!token) {
     window.location.href = '/login';
@@ -18,11 +27,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     return;
   }
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const roomId = urlParams.get('room') || 'nexus-alpha';
   const username = verifiedUser.username;
-
-  document.getElementById('room-display-id').textContent = `Room: ${roomId}`;
 
   // Read pre-selected Lobby media preferences if available
   const initialMicPref = sessionStorage.getItem('nexus_initial_mic') !== 'false';
@@ -92,22 +97,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   // ---------------------------------------------------------------------------
   async function initLocalMedia() {
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({
+      const mediaPromise = navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: true
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Media acquisition timeout')), 2000)
+      );
 
-      // Apply initial mic/video preferences
+      localStream = await Promise.race([mediaPromise, timeoutPromise]);
+
       if (localStream.getAudioTracks().length > 0) {
         localStream.getAudioTracks().forEach(t => t.enabled = localState.micOn);
       }
       if (localStream.getVideoTracks().length > 0) {
         localStream.getVideoTracks().forEach(t => t.enabled = localState.videoOn);
       }
-
       console.log('[Media] Local camera and microphone stream ready.');
     } catch (err) {
-      console.warn('[Media] Using synthetic canvas fallback for headless testing environment:', err);
+      console.warn('[Media] Using synthetic canvas fallback stream:', err.message);
       localStream = createSyntheticStream();
     }
   }
@@ -266,9 +274,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     return decryptedBuffer;
   }
 
-  await initLocalMedia();
-  await initRoomEncryption(roomId);
-  await fetchTurnCredentials();
+  await Promise.all([
+    initLocalMedia(),
+    initRoomEncryption(roomId),
+    fetchTurnCredentials()
+  ]);
 
   // ---------------------------------------------------------------------------
   // 3. Authenticated Socket.io Connection (Handshake with JWT & Forced WebSocket)
