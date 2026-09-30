@@ -300,13 +300,20 @@
 
       try {
         previewStream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: true,
           audio: true
         });
         videoEl.srcObject = previewStream;
+        placeholderEl.classList.add('hidden');
       } catch (err) {
-        console.warn('Media preview unavailable in environment:', err);
-        placeholderEl.classList.remove('hidden');
+        try {
+          previewStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          videoEl.srcObject = previewStream;
+          placeholderEl.classList.add('hidden');
+        } catch (e1) {
+          console.warn('Media preview unavailable:', err);
+          placeholderEl.classList.remove('hidden');
+        }
       }
 
       // Mic Preview Toggle
@@ -328,7 +335,7 @@
         videoBtn.className = `control-btn ${videoEnabled ? 'active' : 'off'}`;
         videoBtn.innerHTML = `<i class="fa-solid ${videoEnabled ? 'fa-video' : 'fa-video-slash'}"></i>`;
         
-        if (videoEnabled) {
+        if (videoEnabled && previewStream && previewStream.getVideoTracks().length > 0) {
           placeholderEl.classList.add('hidden');
         } else {
           placeholderEl.classList.remove('hidden');
@@ -341,22 +348,36 @@
         document.getElementById('room-id-input').value = randomCode;
       });
 
-      // 4. Join Room Form Submission
-      document.getElementById('join-room-form').addEventListener('submit', (e) => {
-        e.preventDefault();
-        const roomId = document.getElementById('room-id-input').value.trim() || 'nexus-alpha';
+      // 4. Join Room Action
+      function navigateToRoom() {
+        const inputEl = document.getElementById('room-id-input');
+        const roomId = (inputEl && inputEl.value.trim()) ? inputEl.value.trim() : 'nexus-alpha';
 
-        // Store pre-selected media states
         sessionStorage.setItem('nexus_initial_mic', micEnabled ? 'true' : 'false');
         sessionStorage.setItem('nexus_initial_video', videoEnabled ? 'true' : 'false');
 
-        // Stop local preview tracks before navigating
         if (previewStream) {
           previewStream.getTracks().forEach(t => t.stop());
         }
 
         window.location.href = `/room?room=${encodeURIComponent(roomId)}`;
-      });
+      }
+
+      const joinBtn = document.querySelector('.btn-join-room');
+      if (joinBtn) {
+        joinBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          navigateToRoom();
+        });
+      }
+
+      const joinForm = document.getElementById('join-room-form');
+      if (joinForm) {
+        joinForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          navigateToRoom();
+        });
+      }
 
       // 5. Logout
       document.getElementById('btn-logout').addEventListener('click', () => {

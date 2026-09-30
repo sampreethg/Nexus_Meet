@@ -98,11 +98,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   async function initLocalMedia() {
     try {
       const mediaPromise = navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: true,
         audio: true
       });
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Media acquisition timeout')), 2000)
+        setTimeout(() => reject(new Error('Media acquisition timeout')), 2500)
       );
 
       localStream = await Promise.race([mediaPromise, timeoutPromise]);
@@ -115,8 +115,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       console.log('[Media] Local camera and microphone stream ready.');
     } catch (err) {
-      console.warn('[Media] Using synthetic canvas fallback stream:', err.message);
-      localStream = createSyntheticStream();
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      } catch (e1) {
+        console.warn('[Media] Using synthetic canvas fallback stream:', err.message);
+        localStream = createSyntheticStream();
+      }
     }
   }
 
