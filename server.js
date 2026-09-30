@@ -252,8 +252,20 @@ io.on('connection', (socket) => {
     });
   });
 
-  // 2. WebRTC Mesh Signaling Relays
+  // Helper to ensure signaling target is within the sender's authorized room
+  function isAuthorizedPeerInSameRoom(targetSocketId) {
+    if (!socket.roomId || !targetSocketId) return false;
+    const targetSocket = io.sockets.sockets.get(targetSocketId);
+    if (targetSocket && targetSocket.roomId !== socket.roomId) {
+      console.warn(`[Signaling Guard] Blocked cross-room signaling from ${socket.id} to ${targetSocketId}`);
+      return false;
+    }
+    return true;
+  }
+
+  // 2. WebRTC Mesh Signaling Relays (Room-Scoped & Validated)
   socket.on('webrtc-offer', ({ targetSocketId, offer }) => {
+    if (!isAuthorizedPeerInSameRoom(targetSocketId)) return;
     io.to(targetSocketId).emit('webrtc-offer', {
       senderSocketId: socket.id,
       offer: offer,
@@ -262,6 +274,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('webrtc-answer', ({ targetSocketId, answer }) => {
+    if (!isAuthorizedPeerInSameRoom(targetSocketId)) return;
     io.to(targetSocketId).emit('webrtc-answer', {
       senderSocketId: socket.id,
       answer: answer
@@ -269,6 +282,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('webrtc-ice-candidate', ({ targetSocketId, candidate }) => {
+    if (!isAuthorizedPeerInSameRoom(targetSocketId)) return;
     io.to(targetSocketId).emit('webrtc-ice-candidate', {
       senderSocketId: socket.id,
       candidate: candidate

@@ -1,10 +1,14 @@
 const { io } = require('socket.io-client');
+const { registerUser } = require('./auth');
 
 async function testWebRTCSignaling() {
   console.log('\n--- STARTING WEBRTC FULL SDP & ICE SIGNALING TEST ---\n');
 
   const SERVER_URL = 'http://localhost:3000';
   const ROOM_ID = 'webrtc-test-room';
+
+  const userA = await registerUser({ username: `rtc_a_${Date.now().toString().slice(-4)}`, email: `rtca_${Date.now()}@test.local`, password: 'Password@123' });
+  const userB = await registerUser({ username: `rtc_b_${Date.now().toString().slice(-4)}`, email: `rtcb_${Date.now()}@test.local`, password: 'Password@123' });
 
   const testResults = {
     clientAJoined: false,
@@ -17,7 +21,7 @@ async function testWebRTCSignaling() {
   let iceCandidatesCount = 0;
 
   // 1. Setup Client A
-  const clientA = io(SERVER_URL);
+  const clientA = io(SERVER_URL, { auth: { token: userA.token } });
 
   clientA.on('connect', () => {
     console.log('✅ Client A connected:', clientA.id);
@@ -66,7 +70,7 @@ async function testWebRTCSignaling() {
   await new Promise(res => setTimeout(res, 1000));
 
   // 2. Setup Client B
-  const clientB = io(SERVER_URL);
+  const clientB = io(SERVER_URL, { auth: { token: userB.token } });
 
   clientB.on('connect', () => {
     console.log('✅ Client B connected:', clientB.id);

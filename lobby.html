@@ -351,7 +351,21 @@
       // 4. Join Room Action
       function navigateToRoom() {
         const inputEl = document.getElementById('room-id-input');
-        const roomId = (inputEl && inputEl.value.trim()) ? inputEl.value.trim() : 'nexus-alpha';
+        const rawVal = (inputEl && inputEl.value.trim()) ? inputEl.value.trim() : 'nexus-alpha';
+        let roomId = rawVal;
+        let hash = '';
+
+        if (rawVal.includes('/room') || rawVal.includes('?room=')) {
+          try {
+            const parsed = new URL(rawVal, window.location.origin);
+            roomId = parsed.searchParams.get('room') || 'nexus-alpha';
+            hash = parsed.hash || '';
+          } catch (_) {}
+        } else if (rawVal.includes('#')) {
+          const parts = rawVal.split('#');
+          roomId = parts[0];
+          hash = '#' + parts[1];
+        }
 
         sessionStorage.setItem('nexus_initial_mic', micEnabled ? 'true' : 'false');
         sessionStorage.setItem('nexus_initial_video', videoEnabled ? 'true' : 'false');
@@ -360,7 +374,7 @@
           previewStream.getTracks().forEach(t => t.stop());
         }
 
-        window.location.href = `/room?room=${encodeURIComponent(roomId)}`;
+        window.location.href = `/room?room=${encodeURIComponent(roomId)}${hash}`;
       }
 
       const joinBtn = document.querySelector('.btn-join-room');

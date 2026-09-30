@@ -5,28 +5,11 @@ const { generateToken, registerUser } = require('./auth');
 // Node.js Web Crypto API compatibility
 const subtle = crypto.webcrypto.subtle;
 
-// Client E2EE helper recreation in Node test environment
-async function initRoomEncryption(roomIdentifier) {
-  const enc = new TextEncoder();
-  const salt = enc.encode(`nexus-e2ee-salt-v2:${roomIdentifier}`);
-  const rawSecret = enc.encode(`nexus-room-secret:${roomIdentifier}`);
-
-  const keyMaterial = await subtle.importKey(
+// Client E2EE helper testing random 256-bit key imported via Web Crypto
+async function importRoomRandomKey(rawKeyBytes) {
+  return await subtle.importKey(
     'raw',
-    rawSecret,
-    { name: 'PBKDF2' },
-    false,
-    ['deriveKey']
-  );
-
-  return await subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
+    rawKeyBytes,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt', 'decrypt']
@@ -96,11 +79,12 @@ async function testE2EE() {
 
   const ROOM_ID = 'crypto-test-vault-99';
 
-  // 1. Establish AES-256-GCM Keys for Alice and Bob
-  console.log('1. [Key Management] Deriving 256-bit AES-GCM session keys via PBKDF2 (100k iterations)...');
-  const aliceKey = await initRoomEncryption(ROOM_ID);
-  const bobKey = await initRoomEncryption(ROOM_ID);
-  console.log('✅ Alice and Bob generated matching zero-knowledge AES-256-GCM keys.\n');
+  // 1. Establish AES-256-GCM Keys for Alice and Bob using 256-bit cryptographically secure random key
+  console.log('1. [Key Management] Generating 256-bit cryptographically secure random room secret (simulating URL fragment #key=...)...');
+  const randomRoomSecret = crypto.randomBytes(32);
+  const aliceKey = await importRoomRandomKey(randomRoomSecret);
+  const bobKey = await importRoomRandomKey(randomRoomSecret);
+  console.log('✅ Alice and Bob imported matching AES-256-GCM keys from random room secret without server exposure.\n');
 
   // 2. Cryptographic Hygiene & IV Uniqueness Test
   console.log('2. [Cryptographic Hygiene] Verifying non-reusable IVs on identical plaintext...');
