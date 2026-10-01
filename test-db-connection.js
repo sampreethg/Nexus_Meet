@@ -1,22 +1,25 @@
 const { PrismaClient } = require('@prisma/client');
 
-async function testConnection() {
-  const url = 'postgresql://postgres:Hackathon%4020@db.tuofavwggkhvjpplmpsl.supabase.co:5432/postgres';
-  const prisma = new PrismaClient({ datasources: { db: { url } } });
-
-  console.log('Testing connection to Supabase PostgreSQL at db.tuofavwggkhvjpplmpsl.supabase.co...');
-  try {
-    await prisma.$connect();
-    console.log('✅ PostgreSQL successfully connected via percent-encoded URI!');
-    const usersCount = await prisma.user.count();
-    console.log(`✅ Database query successful! Total registered users: ${usersCount}`);
-    await prisma.$disconnect();
-    return true;
-  } catch (err) {
-    console.error('❌ Database connection error:', err.message);
-    try { await prisma.$disconnect(); } catch (_) {}
-    return false;
+async function testLocalUsernames() {
+  const users = ['sampreeth', 'postgres', 'root'];
+  const passwords = ['sampreeth', 'Hackathon@20', 'postgres', 'password', ''];
+  for (const u of users) {
+    for (const pw of passwords) {
+      const encPw = encodeURIComponent(pw);
+      const url = `postgresql://${u}:${encPw}@127.0.0.1:5432/postgres`;
+      const p = new PrismaClient({ datasources: { db: { url } } });
+      try {
+        await p.$connect();
+        console.log(`✅ SUCCESS! Connected with user: ${u}, password: ${pw}`);
+        await p.$disconnect();
+        return;
+      } catch (e) {
+        // failed
+        try { await p.$disconnect(); } catch (_) {}
+      }
+    }
   }
+  console.log('No matching username/password found for local postgres.');
 }
 
-testConnection();
+testLocalUsernames();

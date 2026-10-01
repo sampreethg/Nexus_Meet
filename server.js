@@ -4,7 +4,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const Redis = require('ioredis');
-const { registerUser, loginUser, verifyToken, prisma } = require('./auth');
+const { registerUser, loginUser, verifyToken, getUserById, updateUserAvatar, prisma } = require('./auth');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,7 +48,9 @@ if (REDIS_URL) {
 }
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(express.static(path.join(__dirname)));
 
 // =========================================================================
@@ -58,37 +60,76 @@ app.use(express.static(path.join(__dirname)));
 // POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { username, email, password } = req.body;
-    const result = await registerUser({ username, email, password });
+    const { username, email, password, avatarImage, avatarUrl } = req.body;
+    const result = await registerUser({ username, email, password, avatarImage, avatarUrl });
     return res.status(201).json({ success: true, ...result });
   } catch (err) {
-    return res.status(400).json({ success: false, error: err.message });
+    const status = err.statusCode || 400;
+    return res.status(status).json({ success: false, error: err.message, code: err.code || 'REGISTRATION_ERROR' });
   }
 });
 
 // POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { emailOrUsername, password } = req.body;
+    const emailOrUsername = req.body.emailOrUsername || req.body.identifier || req.body.email || req.body.username;
+    const { password } = req.body;
     const result = await loginUser({ emailOrUsername, password });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
-    return res.status(401).json({ success: false, error: err.message });
+    const status = err.statusCode || (err.message.includes('Account not found') ? 404 : 401);
+    return res.status(status).json({ success: false, error: err.message, code: err.code || 'AUTH_ERROR' });
   }
 });
 
 // GET /api/auth/me (Protected Profile Route)
-app.get('/api/auth/me', (req, res) => {
+app.get('/api/auth/me', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ success: false, error: 'Unauthorized: Missing token' });
     }
     const token = authHeader.split(' ')[1];
-    const user = verifyToken(token);
-    return res.status(200).json({ success: true, user });
+    const tokenUser = verifyToken(token);
+    const freshUser = await getUserById(tokenUser.id) || tokenUser;
+    return res.status(200).json({
+      success: true,
+      user: {
+        id: freshUser.id,
+        username: freshUser.username,
+        email: freshUser.email,
+        avatarUrl: freshUser.avatarUrl || null
+      }
+    });
   } catch (err) {
     return res.status(401).json({ success: false, error: 'Invalid or expired token' });
+  }
+});
+
+// POST /api/auth/upload-avatar (Protected Avatar Upload Route)
+app.post('/api/auth/upload-avatar', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Missing token' });
+    }
+    const token = authHeader.split(' ')[1];
+    const tokenUser = verifyToken(token);
+
+    const { avatarImage, avatarUrl, originalName } = req.body;
+    if (!avatarImage && !avatarUrl) {
+      return res.status(400).json({ success: false, error: 'No avatar image data provided.' });
+    }
+
+    const updated = await updateUserAvatar(tokenUser.id, avatarImage || avatarUrl);
+    return res.status(200).json({
+      success: true,
+      user: updated,
+      avatarUrl: updated.avatarUrl
+    });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    return res.status(status).json({ success: false, error: err.message });
   }
 });
 
@@ -180,6 +221,7 @@ io.on('connection', (socket) => {
       userId: verifiedUser.id,
       username: username,
       email: verifiedUser.email,
+      avatarUrl: verifiedUser.avatarUrl || null,
       micOn: socket.micOn,
       videoOn: socket.videoOn,
       handRaised: socket.handRaised,

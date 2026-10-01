@@ -226,7 +226,11 @@
           <!-- User Profile Meta -->
           <div class="user-profile-header">
             <div class="user-profile-meta">
-              <div class="mini-avatar" id="lobby-user-avatar">U</div>
+              <div class="lobby-avatar-container" title="Click to upload or change profile photo">
+                <div class="mini-avatar" id="lobby-user-avatar">U</div>
+                <div class="avatar-change-badge"><i class="fa-solid fa-camera"></i></div>
+                <input type="file" id="lobby-avatar-input" accept="image/jpeg,image/png,image/webp,image/gif" style="display: none;">
+              </div>
               <div class="participant-name-group">
                 <span class="participant-name" id="lobby-username-display">Loading...</span>
                 <span class="participant-tag" id="lobby-email-display">user@domain.com</span>
@@ -282,12 +286,55 @@
       const user = await requireAuth();
       if (!user) return;
 
+      // Helper function to render user avatar with initials fallback
+      function renderUserAvatar(avatarUrl, username) {
+        const initials = (username || 'U').substring(0, 2).toUpperCase();
+        const lobbyAvatarEl = document.getElementById('lobby-user-avatar');
+        const previewAvatarEl = document.getElementById('preview-avatar-circle');
+
+        if (avatarUrl) {
+          lobbyAvatarEl.innerHTML = `<img src="${avatarUrl}" alt="${username || 'User'}" class="mini-avatar-img" onerror="this.style.display='none'; this.parentElement.textContent='${initials}';">`;
+          previewAvatarEl.innerHTML = `<img src="${avatarUrl}" alt="${username || 'User'}" class="preview-avatar-img" onerror="this.style.display='none'; this.parentElement.textContent='${initials}';">`;
+        } else {
+          lobbyAvatarEl.textContent = initials;
+          previewAvatarEl.textContent = initials;
+        }
+      }
+
       // Update User Profile Displays
       document.getElementById('lobby-username-display').textContent = user.username;
       document.getElementById('lobby-email-display').textContent = user.email;
-      const initials = user.username.substring(0, 2).toUpperCase();
-      document.getElementById('lobby-user-avatar').textContent = initials;
-      document.getElementById('preview-avatar-circle').textContent = initials;
+      renderUserAvatar(user.avatarUrl, user.username);
+
+      // Lobby Avatar Upload / Change Handler
+      const avatarContainer = document.querySelector('.lobby-avatar-container');
+      const avatarInput = document.getElementById('lobby-avatar-input');
+      if (avatarContainer && avatarInput) {
+        avatarContainer.addEventListener('click', () => avatarInput.click());
+        avatarInput.addEventListener('change', async (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          if (file.size > 5 * 1024 * 1024) {
+            alert('Avatar image must be smaller than 5MB');
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = async (ev) => {
+            const dataUrl = ev.target.result;
+            try {
+              const res = await apiUploadAvatar(dataUrl);
+              if (res && res.avatarUrl) {
+                user.avatarUrl = res.avatarUrl;
+                renderUserAvatar(res.avatarUrl, user.username);
+              }
+            } catch (err) {
+              console.error('Failed to upload avatar:', err);
+              alert(err.message || 'Failed to upload profile image');
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      }
 
       // 2. Camera / Mic Preview Acquisition
       let previewStream = null;

@@ -1818,6 +1818,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const safeUsername = escapeHTML(user.username || 'User');
     const initials = escapeHTML((user.username || 'U').substring(0, 2).toUpperCase());
+    const hasAvatar = user.avatarUrl && typeof user.avatarUrl === 'string';
+    const avatarContent = hasAvatar
+      ? `<img src="${escapeHTML(user.avatarUrl)}" alt="${safeUsername}" class="tile-avatar-image" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='flex';"><span style="display:none;">${initials}</span>`
+      : `<span>${initials}</span>`;
 
     tile.innerHTML = `
       <div class="video-vignette-overlay"></div>
@@ -1833,7 +1837,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       <div id="placeholder-${user.socketId}" class="video-element-placeholder ${user.videoOn ? 'hidden' : ''}">
         <div class="avatar-wrapper">
           <div class="audio-pulse-ring"></div>
-          <div class="user-avatar-circle">${initials}</div>
+          <div class="user-avatar-circle">${avatarContent}</div>
         </div>
       </div>
 
@@ -1921,15 +1925,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     participantsMap.forEach((user) => {
       const initials = escapeHTML((user.username || 'U').substring(0, 2).toUpperCase());
+      const safeUsername = escapeHTML(user.username || 'User');
       const isSelf = socket && user.socketId === socket.id;
+      const hasAvatar = user.avatarUrl && typeof user.avatarUrl === 'string';
+      const avatarContent = hasAvatar
+        ? `<img src="${escapeHTML(user.avatarUrl)}" alt="${safeUsername}" class="mini-avatar-img" onerror="this.style.display='none'; if(this.nextElementSibling) this.nextElementSibling.style.display='block';"><span style="display:none;">${initials}</span>`
+        : `<span>${initials}</span>`;
 
       const item = document.createElement('div');
       item.className = 'participant-item';
       item.innerHTML = `
         <div class="participant-info">
-          <div class="mini-avatar">${initials}</div>
+          <div class="mini-avatar">${avatarContent}</div>
           <div class="participant-name-group">
-            <span class="participant-name">${escapeHTML(user.username || 'User')} ${isSelf ? '(You)' : ''}</span>
+            <span class="participant-name">${safeUsername} ${isSelf ? '(You)' : ''}</span>
             <span class="participant-tag">${isSelf ? 'Host / Verified' : 'Peer / Verified'}</span>
           </div>
         </div>

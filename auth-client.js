@@ -68,11 +68,11 @@ async function doFetch(url, options = {}, config = {}) {
 }
 
 // Register API Call
-async function apiRegister(username, email, password) {
+async function apiRegister(username, email, password, avatarImage = null) {
   const data = await doFetch('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, email, password })
+    body: JSON.stringify({ username, email, password, avatarImage })
   }, {
     category: 'AUTH',
     operation: 'apiRegister',
@@ -84,6 +84,38 @@ async function apiRegister(username, email, password) {
   }
 
   setAuthSession(data.token, data.user);
+  return data;
+}
+
+// Upload/Update Avatar API Call
+async function apiUploadAvatar(avatarBase64OrUrl) {
+  const token = getAuthToken();
+  if (!token) throw new Error('Authentication required to upload profile photo.');
+
+  const data = await doFetch('/api/auth/upload-avatar', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ avatarImage: avatarBase64OrUrl })
+  }, {
+    category: 'AUTH',
+    operation: 'apiUploadAvatar',
+    maxRetries: 0
+  });
+
+  if (!data || !data.success) {
+    throw new Error(data?.error || 'Avatar upload failed.');
+  }
+
+  // Update cached user session in localStorage
+  const existingUser = getAuthUser() || {};
+  const updatedUser = {
+    ...existingUser,
+    avatarUrl: data.avatarUrl
+  };
+  setAuthSession(token, updatedUser);
   return data;
 }
 
@@ -123,6 +155,8 @@ async function apiFetchProfile() {
     });
 
     if (data && data.success && data.user) {
+      // Update cached session
+      setAuthSession(token, data.user);
       return data.user;
     } else {
       clearAuthSession();
@@ -157,6 +191,7 @@ if (typeof module !== 'undefined' && module.exports) {
     apiRegister,
     apiLogin,
     apiFetchProfile,
+    apiUploadAvatar,
     requireAuth
   };
 }

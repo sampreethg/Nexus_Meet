@@ -4,55 +4,103 @@
     "username": "tester_2100",
     "email": "tester_1790777610933@nexusmeet.com",
     "passwordHash": "$2b$10$FEXaGoZc6vLu.wX0.mS69eVuirFIqf9N5Enqkjs6GMjMe4D.rtS5u",
-    "createdAt": "2026-09-30T14:13:31.260Z"
+    "createdAt": "2026-09-30T14:13:31.260Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790777701946_30rmpc",
     "username": "sampreeth",
     "email": "sampreeth032@gmail.com",
     "passwordHash": "$2b$10$jgDqPJizKHF.mKRnokDwXuRGhqFln/MPByo3wChJH3J1JMKfY83.y",
-    "createdAt": "2026-09-30T14:15:01.946Z"
+    "createdAt": "2026-09-30T14:15:01.946Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781357488_hxqif6",
     "username": "tester_3465",
     "email": "tester_1790781356976@nexusmeet.com",
     "passwordHash": "$2b$10$jqyHv0lHtYkapIMz7WG6c.0Yp1VAOX3txwV8sDN3FQzt.k.a2bd/W",
-    "createdAt": "2026-09-30T15:15:57.488Z"
+    "createdAt": "2026-09-30T15:15:57.488Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781398468_fv4fa9",
     "username": "wb_alice_8406",
     "email": "wba_1790781398406@test.local",
     "passwordHash": "$2b$10$JhILh5xlw9x2T7tciNoVneg9bva7/Vl3Nt1eagADC0vZV3N5mky0.",
-    "createdAt": "2026-09-30T15:16:38.468Z"
+    "createdAt": "2026-09-30T15:16:38.468Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781398527_evj6zs",
     "username": "wb_bob_8471",
     "email": "wbb_1790781398471@test.local",
     "passwordHash": "$2b$10$o3nCYqMBDovWLxsojv4PQe5uwaO0ZA/R03eCL9Z6aGCszlz4BGVbq",
-    "createdAt": "2026-09-30T15:16:38.527Z"
+    "createdAt": "2026-09-30T15:16:38.527Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781398586_aarpml",
     "username": "wb_charlie_8529",
     "email": "wbc_1790781398529@test.local",
     "passwordHash": "$2b$10$DmKsXDQBMqbKo6bdM4AaKeEYtyUA13JYIODaZt0i5J4dSmcYAFmmK",
-    "createdAt": "2026-09-30T15:16:38.586Z"
+    "createdAt": "2026-09-30T15:16:38.586Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781427658_7gvvnc",
     "username": "dc_alice_7588",
     "email": "dca_1790781427588@test.local",
     "passwordHash": "$2b$10$nv0gJL8ZTlF88CIy8NSYruvfbv0t7ymlYEftT5S1eRvW5aeJ3hfmi",
-    "createdAt": "2026-09-30T15:17:07.658Z"
+    "createdAt": "2026-09-30T15:17:07.658Z",
+    "avatarUrl": null
   },
   {
     "id": "usr_1790781427743_byjghn",
     "username": "dc_bob_7662",
     "email": "dcb_1790781427662@test.local",
     "passwordHash": "$2b$10$uFY8yWdlbpSTUzWfp30eH.EhjPcu3qup8I0ambv2QpO2Q5.veBTMC",
-    "createdAt": "2026-09-30T15:17:07.743Z"
+    "createdAt": "2026-09-30T15:17:07.743Z",
+    "avatarUrl": null
+  },
+  {
+    "id": "usr_1790817970354_rmplqg",
+    "username": "user_1790817969567",
+    "email": "user_1790817969567@nexusmeet.test",
+    "passwordHash": "$2b$10$70341cUC8UYk6oR4XFUafu/BRsjlPxfOLaf579zz686sZpBmE8UYO",
+    "avatarUrl": "/uploads/avatars/avatar-usr_1790817970354_rmplqg-1790817970355.png",
+    "createdAt": "2026-10-01T01:26:10.358Z"
+  },
+  {
+    "id": "usr_1790817994690_x6atgk",
+    "username": "user_1790817994403",
+    "email": "user_1790817994403@nexusmeet.test",
+    "passwordHash": "$2b$10$oPfrbCKgEi3UqjE2Y2yq7.Zc8rE9Lovm1G/M0MUES9.0wkkp7SeR6",
+    "avatarUrl": "/uploads/avatars/avatar-usr_1790817994690_x6atgk-1790817994690.png",
+    "createdAt": "2026-10-01T01:26:34.693Z"
+  },
+  {
+    "id": "usr_1790818048989_0iuysq",
+    "username": "user_1790818048566",
+    "email": "user_1790818048566@nexusmeet.test",
+    "passwordHash": "$2b$10$7dJT6HVrj1oUNXkih/oSGeoFgNSh4YgWC6JJOQdTEfR8a7gFUtrkG",
+    "avatarUrl": "/uploads/avatars/avatar-usr_1790818048989_0iuysq-1790818049641.png",
+    "createdAt": "2026-10-01T01:27:29.011Z"
+  },
+  {
+    "id": "usr_1790818082139_uqnokb",
+    "username": "reboot_user_1790818081839",
+    "email": "reboot_1790818081839@nexusmeet.test",
+    "passwordHash": "$2b$10$ecx/CvZfbTo4s5tdB7InzO24Mplwgvl8KfPUZSJBL8hMVlHoWXbyO",
+    "avatarUrl": "/uploads/avatars/avatar-usr_1790818082139_uqnokb-1790818082139.png",
+    "createdAt": "2026-10-01T01:28:02.142Z"
+  },
+  {
+    "id": "usr_1790818119493_sr3m93",
+    "username": "user_1790818119208",
+    "email": "user_1790818119208@nexusmeet.test",
+    "passwordHash": "$2b$10$LyCe9KeA5TnPeDkQS8lRs.eCK75sv0fePG5WPXMLGlh7MLz0HNSyG",
+    "avatarUrl": "/uploads/avatars/avatar-usr_1790818119493_sr3m93-1790818120062.png",
+    "createdAt": "2026-10-01T01:28:39.498Z"
   }
 ]

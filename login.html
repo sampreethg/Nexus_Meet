@@ -149,6 +149,97 @@
       gap: 0.45rem;
     }
 
+    .avatar-upload-row {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+      padding: 0.55rem 0.75rem;
+      background: var(--bg-app);
+      border: 1px dashed var(--border-subtle);
+      border-radius: var(--radius-sm);
+      transition: var(--transition-tactile);
+    }
+
+    .avatar-upload-row:hover {
+      border-color: var(--border-active);
+    }
+
+    .avatar-preview-wrapper {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-active);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      flex-shrink: 0;
+      position: relative;
+    }
+
+    .avatar-preview-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .avatar-fallback-icon {
+      color: var(--text-muted);
+      font-size: 1.2rem;
+    }
+
+    .avatar-upload-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+      flex: 1;
+    }
+
+    .btn-avatar-browse {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.3rem 0.6rem;
+      background: var(--bg-surface-elevated);
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      color: var(--text-primary);
+      font-size: 0.76rem;
+      font-weight: 500;
+      cursor: pointer;
+      width: fit-content;
+      transition: var(--transition-tactile);
+    }
+
+    .btn-avatar-browse:hover {
+      background: var(--bg-surface-hover);
+      border-color: var(--border-active);
+    }
+
+    .btn-avatar-remove {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.15rem 0.35rem;
+      background: transparent;
+      border: none;
+      color: var(--status-danger);
+      font-size: 0.72rem;
+      cursor: pointer;
+      width: fit-content;
+    }
+
+    .btn-avatar-remove:hover {
+      text-decoration: underline;
+    }
+
+    .avatar-file-hint {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+    }
+
     .btn-auth-submit {
       width: 100%;
       padding: 0.65rem;
@@ -283,7 +374,30 @@
           <span id="reg-password-error" class="field-error-msg"></span>
         </div>
 
-        <button type="submit" id="btn-register-submit" class="btn-auth-submit">
+        <div class="form-group" style="margin-top: 0.75rem;">
+          <label class="form-label">Profile Photo (Optional)</label>
+          <div class="avatar-upload-row">
+            <div class="avatar-preview-wrapper" id="reg-avatar-preview-box">
+              <img id="reg-avatar-preview-img" src="" alt="Avatar preview" class="avatar-preview-img" style="display: none;">
+              <div id="reg-avatar-fallback-icon" class="avatar-fallback-icon">
+                <i class="fa-solid fa-user"></i>
+              </div>
+            </div>
+            <div class="avatar-upload-controls">
+              <label for="reg-avatar-file" class="btn-avatar-browse">
+                <i class="fa-solid fa-camera"></i>
+                <span id="reg-avatar-btn-text">Choose Photo</span>
+              </label>
+              <input type="file" id="reg-avatar-file" accept="image/png, image/jpeg, image/webp, image/gif" style="display: none;">
+              <button type="button" id="reg-avatar-remove-btn" class="btn-avatar-remove" style="display: none;">
+                <i class="fa-solid fa-xmark"></i> Remove
+              </button>
+              <span class="avatar-file-hint">PNG, JPG, WebP up to 5MB</span>
+            </div>
+          </div>
+        </div>
+
+        <button type="submit" id="btn-register-submit" class="btn-auth-submit" style="margin-top: 0.85rem;">
           <span>Create Account</span>
           <i class="fa-solid fa-user-plus"></i>
         </button>
@@ -321,6 +435,52 @@
 
       function hideBannerError() {
         bannerError.style.display = 'none';
+      }
+
+      // Avatar Upload Picker Logic
+      let selectedAvatarBase64 = null;
+      const avatarFileInput = document.getElementById('reg-avatar-file');
+      const avatarPreviewImg = document.getElementById('reg-avatar-preview-img');
+      const avatarFallbackIcon = document.getElementById('reg-avatar-fallback-icon');
+      const avatarRemoveBtn = document.getElementById('reg-avatar-remove-btn');
+      const avatarBtnText = document.getElementById('reg-avatar-btn-text');
+
+      if (avatarFileInput) {
+        avatarFileInput.addEventListener('change', (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+
+          if (!file.type.startsWith('image/')) {
+            showBannerError('Please select a valid image file (PNG, JPG, WebP).');
+            return;
+          }
+
+          if (file.size > 5 * 1024 * 1024) {
+            showBannerError('Profile image must be less than 5MB.');
+            return;
+          }
+
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            selectedAvatarBase64 = event.target.result;
+            avatarPreviewImg.src = selectedAvatarBase64;
+            avatarPreviewImg.style.display = 'block';
+            avatarFallbackIcon.style.display = 'none';
+            avatarRemoveBtn.style.display = 'inline-flex';
+            avatarBtnText.textContent = 'Change Photo';
+          };
+          reader.readAsDataURL(file);
+        });
+
+        avatarRemoveBtn.addEventListener('click', () => {
+          selectedAvatarBase64 = null;
+          avatarFileInput.value = '';
+          avatarPreviewImg.src = '';
+          avatarPreviewImg.style.display = 'none';
+          avatarFallbackIcon.style.display = 'flex';
+          avatarRemoveBtn.style.display = 'none';
+          avatarBtnText.textContent = 'Choose Photo';
+        });
       }
 
       // Tab Switcher
@@ -374,7 +534,7 @@
         submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating Account...';
 
         try {
-          await apiRegister(username, email, password);
+          await apiRegister(username, email, password, selectedAvatarBase64);
           window.location.href = '/lobby';
         } catch (err) {
           showBannerError(err.message);
